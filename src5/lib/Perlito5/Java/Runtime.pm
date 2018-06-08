@@ -23,14 +23,23 @@ sub perl5_to_java {
     local %Perlito5::Java::Java_constant_seen;
 
     # warn "in eval enter\n";
-    # warn "External scope ", Data::Dumper::Dumper($scope_java);
-    # warn "BASE_SCOPE ", Data::Dumper::Dumper($Perlito5::BASE_SCOPE);
-    # warn "SCOPE_STMT ", Data::Dumper::Dumper(\@Perlito5::SCOPE_STMT);
+    # warn "External scope ", Perlito5::Dumper::Dumper($scope_java);
+    # warn "BASE_SCOPE ", Perlito5::Dumper::Dumper($Perlito5::BASE_SCOPE);
+    # warn "SCOPE_STMT ", Perlito5::Dumper::Dumper(\@Perlito5::SCOPE_STMT);
 
     my $match = Perlito5::Grammar::exp_stmts( $source, 0 );
 
-    if ( !$match || $match->{to} != length($source) ) {
+    if ( !$match || $match->{to} < length($source) ) {
         die "Syntax error in eval near pos ", $match->{to};
+    }
+
+    # TODO - process type annotations like:
+    #   package Java::Object { import => 'java.lang.Object' }
+    #
+    while ( @Perlito::ANNOTATION ) {
+        my $ann = shift(@Perlito::ANNOTATION);
+        my $str = Perlito5::AST::CompUnit::process_java_import_statement(@$ann);
+        # warn "ANNOTATION: [[[\n$str\n]]]\n";
     }
 
     my $ast = 
@@ -53,16 +62,45 @@ sub perl5_to_java {
     # say "java-source: [" . $java_code . "]";
 
     # warn "in perl_to_java: ", Perlito5::Dumper::Dumper( \@Perlito5::Java::Java_constants );
+
+    my $java_classes = Perlito5::Java::get_java_class_info() // {};
+    my $className = "PlEval" . $Perlito5::ID++;
     my $constants = "";
+    $constants .= 
+            "import org.perlito.Perlito5.*;\n"
+          . "import java.util.regex.Pattern;\n"
+          # . join("",
+          #       # import the Java classes
+          #       # that were declared with
+          #       #
+          #       #   package My::Java { import => "org.My.Java", ... }
+          #       #
+          #       map {
+          #                   my $class = $java_classes->{$_};
+          #                   $class->{import} ? "import $class->{import};\n" : ()
+          #           }
+          #           sort keys %$java_classes
+          #   )
+          . "public class " . $className . " {\n";
     for my $s ( @Perlito5::Java::Java_constants ) {
         # say "s: [[$s]] ", ref($s), "\n";
         $constants .= "    " . $s . ";\n";
     }
+    $constants .= 
+            "    public " . $className . "() {\n"
+          . "    }\n";
 
     Perlito5::set_global_phase("UNITCHECK");
     $_->() while $_ = shift @Perlito5::UNITCHECK_BLOCK;
 
-    # warn "in eval BASE_SCOPE exit: ", Data::Dumper::Dumper($Perlito5::BASE_SCOPE);
+    # warn "in eval BASE_SCOPE exit: ", Perlito5::Dumper::Dumper($Perlito5::BASE_SCOPE);
+
+    return ($className, $java_code, $constants);
+}
+
+sub eval_ast {
+    my ($ast) = @_;
+    my $want = 0;
 
     # TODO - process type annotations like:
     #   package Java::Object { import => 'java.lang.Object' }
@@ -73,14 +111,7 @@ sub perl5_to_java {
         # warn "ANNOTATION: [[[\n$str\n]]]\n";
     }
 
-    return ($java_code, $constants);
-}
-
-sub eval_ast {
-    my ($ast) = @_;
-    my $want = 0;
-
-    # warn "AST:\n" . Data::Dumper::Dumper($ast);
+    # warn "AST:\n" . Perlito5::Dumper::Dumper($ast);
 
     # use lexicals from BEGIN scratchpad
     $ast = $ast->emit_begin_scratchpad();
@@ -90,24 +121,38 @@ sub eval_ast {
     # say STDERR "java-source: [" . $java_code . "]";
     Perlito5::set_global_phase("UNITCHECK");
     $_->() while $_ = shift @Perlito5::UNITCHECK_BLOCK;
-    # warn "in eval BASE_SCOPE exit: ", Data::Dumper::Dumper($Perlito5::BASE_SCOPE);
+    # warn "in eval BASE_SCOPE exit: ", Perlito5::Dumper::Dumper($Perlito5::BASE_SCOPE);
 
-    # TODO - process type annotations like:
-    #   package Java::Object { import => 'java.lang.Object' }
-    #
-    while ( @Perlito::ANNOTATION ) {
-        my $ann = shift(@Perlito::ANNOTATION);
-        my $str = Perlito5::AST::CompUnit::process_java_import_statement(@$ann);
-        # warn "ANNOTATION: [[[\n$str\n]]]\n";
-    }
-
+    my $java_classes = Perlito5::Java::get_java_class_info() // {};
+    my $className = "PlEval" . $Perlito5::ID++;
     my $constants = "";
+    $constants .= 
+            "import org.perlito.Perlito5.*;\n"
+          . "import java.util.regex.Pattern;\n"
+          # . join("",
+          #       # import the Java classes
+          #       # that were declared with
+          #       #
+          #       #   package My::Java { import => "org.My.Java", ... }
+          #       #
+          #       map {
+          #                   my $class = $java_classes->{$_};
+          #                   $class->{import} ? "import $class->{import};\n" : ()
+          #           }
+          #           sort keys %$java_classes
+          #   )
+          . "public class " . $className . " {\n";
     for my $s ( @Perlito5::Java::Java_constants ) {
         # say "s: [[$s]] ", ref($s), "\n";
         $constants .= "    " . $s . ";\n";
     }
+    $constants .= 
+            "    public " . $className . "() {\n"
+          . "    }\n";
 
-    @_ = ($java_code, $constants);
+    # warn "constants [[\n$constants ]]\n";
+
+    @_ = ($className, $java_code, $constants);
     return Java::inline('PlJavaCompiler.eval_java_string(List__)');
 }
 
@@ -245,8 +290,11 @@ sub emit_java {
 
     # This sub returns a list, to avoid the Java error: "constant string too long"
 
+    my %java_classes = %{ $args{java_classes} // {} };
+
     if ($Perlito5::JAVA_EVAL) {
-        return ( <<'EOT' );
+        return (
+            <<'EOT'
 
 // use perlito5-lib.jar
 import org.perlito.Perlito5.*;
@@ -254,11 +302,21 @@ import java.util.regex.Pattern;
 import java.time.*;
 import java.time.format.*;
 import java.lang.management.*;
-
 EOT
+            # import the Java classes
+            # that were declared with
+            #
+            #   package My::Java { import => "org.My.Java", ... }
+            #
+            # , (( map {
+            #             my $class = $java_classes{$_};
+            #             $class->{import} ? "import $class->{import};\n" : ()
+            #     }
+            #     sort keys %java_classes
+            #   ))
+            # , "\n"
+        );
     }
-
-    my %java_classes = %{ $args{java_classes} // {} };
 
     my @number_unary = qw/ op_int neg complement abs sqrt cos sin exp log /;
 
@@ -311,8 +369,10 @@ EOT
         String  => 'PlString',
     );
     for (values %java_classes) {
-        if ( $_->{import} || $_->{extends} || $_->{implements} ) {
-            $native_to_perl{$_->{java_type}} = $_->{java_native_to_perl};
+        if ( $_->{perl_to_java} ) {
+            if ( $_->{import} || $_->{extends} || $_->{implements} ) {
+                $native_to_perl{$_->{java_type}} = $_->{java_native_to_perl};
+            }
         }
     }
 
@@ -338,6 +398,14 @@ EOT
     #   str_or              |.
     #   str_and             &.
     #   str_xor             ^.
+
+    my %special_var_index = (
+        # this is used by the variable localization methods
+        '_'  => [ 4, 'PlLvalue' ],
+        '\\' => [ 5, 'PlLvalue' ],
+        '|'  => [ 6, 'PlLvalueSpecialVarAutoflush' ],
+        '@'  => [ 7, 'PlLvalue' ],
+    );
 
     return (
         <<'EOT'
@@ -368,12 +436,12 @@ EOT
         #
         #   package My::Java { import => "org.My.Java", ... }
         #
-    , (( map {
-                    my $class = $java_classes{$_};
-                    $class->{import} ? "import $class->{import};\n" : ()
-            }
-            sort keys %java_classes
-      ))
+    , # (( map {
+      #               my $class = $java_classes{$_};
+      #               $class->{import} ? "import $class->{import};\n" : ()
+      #       }
+      #       sort keys %java_classes
+      # ))
         # extends the imported Java classes
         # that were declared with
         #
@@ -667,17 +735,14 @@ class PerlOp {
         int pos = nameSpace.lastIndexOf("::");
         boolean isMain = nameSpace.equals("main::");
         PlHash out = new PlHash();
-        getSymbolTableScan(out, PlV.cvar, nameSpace, pos, isMain);
-        getSymbolTableScan(out, PlV.svar, nameSpace, pos, isMain);
-        getSymbolTableScan(out, PlV.avar, nameSpace, pos, isMain);
-        getSymbolTableScan(out, PlV.hvar, nameSpace, pos, isMain);
-        getSymbolTableScan(out, PlV.fvar, nameSpace, pos, isMain);
+        getSymbolTableScan(out, PlStringConstant.constants, nameSpace, pos, isMain);
         return out;
     }
-    private static final void getSymbolTableScan(PlHash out, PlHash vars, String nameSpace, int pos, boolean isMain) {
+
+    private static final void getSymbolTableScan(PlHash out, HashMap<String, PlStringConstant> vars, String nameSpace, int pos, boolean isMain) {
+        String[] keys = vars.keySet().toArray(new String[0]);
         if (isMain) {
-            for (PlObject o : (PlArray)PlCORE.keys(PlCx.LIST, vars)) {
-                String name = o.toString();
+            for (String name : keys) {
                 if (name.length() > pos + 2 && name.indexOf(nameSpace) == 0 && name.lastIndexOf("::") == pos) {
                     // normal variable like "ARGV" in $main::ARGV
                     out.hset(name.substring(pos+2), PlV.fget(name));
@@ -690,8 +755,7 @@ class PerlOp {
             }
         }
         else {
-            for (PlObject o : (PlArray)PlCORE.keys(PlCx.LIST, vars)) {
-                String name = o.toString();
+            for (String name : keys) {
                 if (name.length() > pos + 2 && name.indexOf(nameSpace) == 0) {
                     if (name.lastIndexOf("::") == pos) {
                         // normal variable like "ARGV" in $main::ARGV
@@ -706,14 +770,17 @@ class PerlOp {
             }
         }
     }
+
     public static final PlObject deleteSymbolTable(String nameSpace, PlObject index) {
         // delete $Foo::{foo}
-        PlString name = new PlString(nameSpace + index.toString());
-        PlV.cvar.hdelete(PlCx.VOID, name);
-        PlV.svar.hdelete(PlCx.VOID, name);
-        PlV.avar.hdelete(PlCx.VOID, name);
-        PlV.hvar.hdelete(PlCx.VOID, name);
-        PlV.fvar.hdelete(PlCx.VOID, name);
+        String sname = nameSpace + index.toString();
+        PlString name = new PlString(sname);
+        PlStringConstant glob = PlStringConstant.getConstant(sname);
+        glob.codeRef.set(PlCx.UNDEF);
+        glob.scalarRef.set(PlCx.UNDEF);
+        glob.arrayRef.set(new PlArrayRef());
+        glob.hashRef.set(new PlHashRef());
+        glob.fileRef.set(new PlFileHandle(sname));
         return PlCx.UNDEF; 
     }
 
@@ -722,7 +789,7 @@ class PerlOp {
         if (fh.is_lvalue()) {
             if (fh.is_undef()) {
                 // $fh autovivification to filehandle
-                fh.set(new PlFileHandle());
+                fh.set(new PlFileHandle(nameSpace));
             }
             fh = fh.get();
         }
@@ -1018,7 +1085,7 @@ class PerlOp {
                 }
             }
             return PlCORE.die( "Can't locate object method \"" + method
-                + "\" via Java class \"" + cl.getSimpleName()
+                + "\" via Java class \"" + cl.getCanonicalName()
                 + "\" (perhaps the parameter types don\'t match?)" );
         }
         if ( invocant.is_undef() ) {
@@ -1039,7 +1106,7 @@ class PerlOp {
             // $fh->print() is allowed, even if $fh is unblessed
             if (method.equals("print")) {
                 args.shift();   // TODO - keep filehandle in arg list
-                return PlCORE.print(context, (PlFileHandle)invocant, args);
+                return PlCORE.print(context, (PlFileHandle)invocant, args.toString());
             }
         }
 
@@ -1086,13 +1153,73 @@ class PerlOp {
         PlV.regex_result = new_match;
     }
     public static final PlObject push_local_named_sub(PlObject value, String name) {
+        PlStringConstant glob = PlStringConstant.getConstant(name);
         PlV.local_stack.a.add(new PlString(name));
-        PlV.local_stack.a.add(PlV.cget_no_autoload(name));
+        PlV.local_stack.a.add(glob.codeRef);
         PlV.local_stack.a.add(PlCx.INT3);
-        PlLvalue newValue = new PlLvalue(value);
-        PlV.cset_alias(name, newValue);
+        PlLvalue newValue = new PlLvalue();
+        newValue.set(value);
+        glob.cset_alias( newValue );
         return newValue;
     }
+    public static final PlObject push_local_scalar(PlObject value, String name) {
+        PlStringConstant glob = PlStringConstant.getConstant(name);
+        PlV.local_stack.a.add(new PlString(name));
+        PlV.local_stack.a.add(glob.scalarRef);
+        PlV.local_stack.a.add(new PlInt(20));       // XXX magic number
+        PlLvalue newValue = new PlLvalue();
+        newValue.set(value);
+        glob.scalarRef = newValue;
+        return newValue;
+    }
+    public static final PlObject push_local_array(PlObject value, String name) {
+        PlStringConstant glob = PlStringConstant.getConstant(name);
+        PlV.local_stack.a.add(new PlString(name));
+        PlV.local_stack.a.add(glob.arrayRef);
+        PlV.local_stack.a.add(new PlInt(21));       // XXX magic number
+        PlLvalue newValue = new PlLvalue();
+        newValue.set(value);
+        glob.arrayRef = newValue;
+        return newValue;
+    }
+    public static final PlObject push_local_hash(PlObject value, String name) {
+        PlStringConstant glob = PlStringConstant.getConstant(name);
+        PlV.local_stack.a.add(new PlString(name));
+        PlV.local_stack.a.add(glob.hashRef);
+        PlV.local_stack.a.add(new PlInt(22));       // XXX magic number
+        PlLvalue newValue = new PlLvalue();
+        newValue.set(value);
+        glob.hashRef = newValue;
+        return newValue;
+    }
+    public static final PlObject push_local_file(PlObject value, String name) {
+        PlStringConstant glob = PlStringConstant.getConstant(name);
+        PlV.local_stack.a.add(new PlString(name));
+        PlV.local_stack.a.add(glob.fileRef);
+        PlV.local_stack.a.add(new PlInt(23));       // XXX magic number
+        PlLvalue newValue = new PlLvalue();
+        newValue.set(value);
+        glob.fileRef = newValue;
+        return newValue;
+    }
+
+    // localizers for special variables like $_ $\
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $index     = $special_var_index{$_}[0];
+                my $class     = $special_var_index{$_}[1];
+"
+    public static final void push_local_special_var_${java_name}() {
+        PlV.local_stack.a.add(PlV.${java_name});
+        PlV.local_stack.a.add(PlCx.INT${index});
+        PlV.${java_name} = new $class();
+    }
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
 
     public static final int local_length() {
         return PlV.local_stack.to_int();
@@ -1119,8 +1246,39 @@ class PerlOp {
                     break;
                 case 3:
                     index     = PlV.local_stack.pop();
-                    PlV.cset_alias(index.toString(), (PlLvalue)v);
+                    PlStringConstant.getConstant(index.toString()).cset_alias( (PlLvalue)v );
                     break;
+                case 20:      // XXX magic number
+                    index     = PlV.local_stack.pop();
+                    PlStringConstant.getConstant(index.toString()).scalarRef = (PlLvalue)v;
+                    break;
+                case 21:      // XXX magic number
+                    index     = PlV.local_stack.pop();
+                    PlStringConstant.getConstant(index.toString()).arrayRef = (PlLvalue)v;
+                    break;
+                case 22:      // XXX magic number
+                    index     = PlV.local_stack.pop();
+                    PlStringConstant.getConstant(index.toString()).hashRef = (PlLvalue)v;
+                    break;
+                case 23:      // XXX magic number
+                    index     = PlV.local_stack.pop();
+                    PlStringConstant.getConstant(index.toString()).fileRef = (PlLvalue)v;
+                    break;
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $index     = $special_var_index{$_}[0];
+                my $class     = $special_var_index{$_}[1];
+"
+                case ${index}:
+                    PlV.${java_name} = ($class)v;
+                    break;
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
+
             }
         }
         return ret;
@@ -1476,7 +1634,7 @@ EOT
     public static final PlObject grep(PlClosure c, PlArray a, PlArray list__, int wantarray) {
         PlArray ret = new PlArray();
         int size = a.to_int();
-        PlLvalue v__ref = (PlLvalue)PlV.sget("main::_");
+        PlLvalue v__ref = PlV.Scalar_ARG;
         PlObject v__val = v__ref.get();
         for (int i = 0; i < size; i++) {
             boolean result;
@@ -1484,7 +1642,7 @@ EOT
             v__ref.set(temp);
             result = c.apply(PlCx.SCALAR, list__).to_boolean();
             if (result) {
-                ret.push(temp);
+                ret.push_void(temp);
             }
         }
         v__ref.set(v__val);
@@ -1494,11 +1652,11 @@ EOT
         if (wantarray == PlCx.LIST ) {
             PlArray ret = new PlArray();
             int size = a.to_int();
-            PlLvalue v__ref = (PlLvalue)PlV.sget("main::_");
+            PlLvalue v__ref = PlV.Scalar_ARG;
             PlObject v__val = v__ref.get();
             for (int i = 0; i < size; i++) {
                 v__ref.set(a.aget(i));
-                ret.push(c.apply(PlCx.LIST, list__));
+                ret.push_void(c.apply(PlCx.LIST, list__));
             }
             v__ref.set(v__val);
             return ret;
@@ -1506,7 +1664,7 @@ EOT
         else {
             int ret = 0;
             int size = a.to_int();
-            PlLvalue v__ref = (PlLvalue)PlV.sget("main::_");
+            PlLvalue v__ref = PlV.Scalar_ARG;
             PlObject v__val = v__ref.get();
             for (int i = 0; i < size; i++) {
                 v__ref.set(a.aget(i));
@@ -1528,6 +1686,15 @@ EOT
         v_a_ref.set(v_a_val);
         v_b_ref.set(v_b_val);
         return (wantarray == PlCx.LIST ) ? ret : ret.length_of_array();
+    }
+    public static final PlObject sort(PlObject c, PlArray a, PlArray list__, int wantarray) {
+        if (c.is_coderef()) {
+            if (c.is_lvalue()) {
+                c = c.get();
+            }
+            return sort((PlClosure)c, a, list__, wantarray);
+        }
+        return PlCORE.die("Not implemented: first argument to sort() is not a closure");
     }
 
     public static PlObject prototype(PlObject arg, String packageName) {
@@ -1552,11 +1719,14 @@ EOT
         return PlCx.UNDEF;
     }
 
-    private static int _regex_character_class_escape(int offset, String s, StringBuilder sb, int length, boolean flag_xx) {
+    private static int _regex_character_class_escape(int offset, String s, StringBuilder sb, int length, boolean flag_xx,
+        StringBuilder rejected)
+    {
         // inside [ ... ]
         //      space    becomes: "\ " unless the /xx flag is used (flag_xx)
         //      \120     becomes: \0120 - Java requires octal sequences to start with zero
         //      \0       becomes: \00 - Java requires the extra zero
+        //      \b       is rejected, Java doesn't support \b inside [...]
         boolean first = true;
         for ( ; offset < length; ) {
             final int c = s.codePointAt(offset);
@@ -1574,6 +1744,15 @@ EOT
                     sb.append("\\[");
                     break;
                 case '\\':  // escape - \[ \120
+
+                    if (offset < length) {
+                        if (s.codePointAt(offset + 1) == 'b') {
+                            rejected.append("\\b");      // Java doesn't support \b inside [...]
+                            offset++;
+                            break;
+                        }
+                    }
+
                     sb.append(Character.toChars(c));
                     if (offset < length) {
                         offset++;
@@ -1639,11 +1818,13 @@ EOT
     // \120     becomes: \0120 - Java requires octal sequences to start with zero
     // \0       becomes: \00 - Java requires the extra zero
     // (?#...)  inline comment is removed
+    // [xx \b xx]  becomes: (?:[xx xx]|\b) - java doesn't support \b as a character
     //
     public static String regex_escape(String s, boolean flag_xx) {
         // escape spaces in character classes
         final int length = s.length();
         StringBuilder sb = new StringBuilder();
+        StringBuilder rejected = new StringBuilder();
         for (int offset = 0; offset < length; ) {
             final int c = s.codePointAt(offset);
             switch (c) {
@@ -1671,9 +1852,24 @@ EOT
                             }
                             break;
                 case '[':   // character class
+                            int len = sb.length();
                             sb.append(Character.toChars(c));
                             offset++;
-                            offset = _regex_character_class_escape(offset, s, sb, length, flag_xx);
+                            offset = _regex_character_class_escape(offset, s, sb, length, flag_xx, rejected);
+                            if (rejected.length() > 0) {
+                                // process \b inside character class
+                                String subseq;
+                                if ((sb.length() - len) == 2) {
+                                    subseq = "(?:" + rejected.toString() + ")";
+                                }
+                                else {
+                                    subseq = "(?:" + sb.substring(len) + "|" + rejected.toString() + ")";
+                                }
+                                // PlCORE.warn(PlCx.VOID, new PlArray(new PlString("Rejected: " + subseq)));
+                                rejected.setLength(0);
+                                sb.setLength(len);
+                                sb.append(subseq);
+                            }
                             break;
                 case '(':   
                             boolean append = true;
@@ -1718,31 +1914,6 @@ EOT
         return sb.toString();
     }
 
-    // ****** pos()
-    // TODO - optimize: we are adding "pos" (Integer) to all PlLvalue objects
-
-    public static final PlObject pos(PlObject vv) {
-        if (!vv.is_lvalue()) {
-            return PlCx.UNDEF;
-        }
-        PlLvalue var = (PlLvalue)vv;
-        Integer pos = var.pos;
-        if (pos == null) {
-            return PlCx.UNDEF;
-        }
-        return new PlInt(pos);
-    }
-    public static final PlObject set_pos(PlObject vv, PlObject value) {
-        PlLvalue var = (PlLvalue)vv;
-        var.regex_zero_length_flag = false;
-        if (value.is_undef()) {
-            var.pos = null;
-        }
-        else {
-            var.pos = value.to_int();
-        }
-        return value;
-    }
     public static final PlObject set_pos(PlObject vv, PlObject value, PlRegexResult matcher, String str) {
         if (!vv.is_lvalue()) {
             return value;
@@ -1758,7 +1929,7 @@ EOT
         int pos = value.to_int();
 
         // check for zero-length match
-        int old_pos = pos(var).to_int();
+        int old_pos = var.pos().to_int();
 
         if (old_pos == pos) {
             // PlCORE.say("zero length match");
@@ -1792,7 +1963,7 @@ EOT
     }
 
     // ****** regex variables
-    // class PlRegexResult extends PlObject {
+    // class PlRegexResult
     //     public Matcher matcher;      // regex captures
     //     public String  regex_string; // last string used in a regex
 
@@ -1871,7 +2042,7 @@ EOT
             Matcher matcher = pat.p.matcher(str);
             if (global) {
                 // scalar context, global match
-                PlObject pos = pos(input);
+                PlObject pos = input.pos();
                 boolean find;
                 if (pos.is_undef()) {
                     find = matcher.find();
@@ -1918,20 +2089,20 @@ EOT
                     for (int i = 1; i <= count; i++) {
                         String cap = matcher.group(i);
                         if (cap == null) {
-                            ret.push(PlCx.UNDEF);
+                            ret.push_void(PlCx.UNDEF);
                         }
                         else {
-                            ret.push(cap);
+                            ret.push_void(cap);
                         }
                     }
                 }
                 else {
                     String cap = matcher.group();
                     if (cap == null) {
-                        ret.push(PlCx.UNDEF);
+                        ret.push_void(PlCx.UNDEF);
                     }
                     else {
-                        ret.push(cap);
+                        ret.push_void(cap);
                     }
                 }
             }
@@ -1951,10 +2122,10 @@ EOT
                 for (int i = 1; i <= matcher.groupCount(); i++) {
                     String cap = matcher.group(i);
                     if (cap == null) {
-                        ret.push(PlCx.UNDEF);
+                        ret.push_void(PlCx.UNDEF);
                     }
                     else {
-                        ret.push(cap);
+                        ret.push_void(cap);
                     }
                 }
             }
@@ -1972,7 +2143,7 @@ EOT
         return match(s, new PlRegex(pat, 0, false), want, global, c_flag);
     }
 
-    public static final PlObject replace(PlLvalue s, PlRegex pat, PlClosure rep, int want, boolean global) {
+    public static final PlObject replace(PlLvalue s, PlRegex pat, PlClosure rep, int want, boolean global, boolean replace_flag) {
         String str = s.toString();
         int count = 0;
         Matcher matcher = pat.p.matcher(str);
@@ -1997,7 +2168,9 @@ EOT
                 if (pos <= str.length()) {
                     buf.append( str.substring(pos) );
                 }
-                s.set(new PlString(buf.toString()));
+                if (replace_flag) {
+                    s.set(new PlString(buf.toString()));
+                }
             }
         }
         else {
@@ -2017,7 +2190,9 @@ EOT
                 if (end <= str.length()) {
                     buf.append( str.substring(end) );
                 }
-                s.set(new PlString(buf.toString()));
+                if (replace_flag) {
+                    s.set(new PlString(buf.toString()));
+                }
             }
         }
         if (count == 0) {
@@ -2026,7 +2201,7 @@ EOT
         }
         return new PlInt(count);
     }
-    public static final PlObject replace(PlLvalue s, PlRegex pat, String replace, int want, boolean global) {
+    public static final PlObject replace(PlLvalue s, PlRegex pat, String replace, int want, boolean global, boolean replace_flag) {
         String str = s.toString();
         int count = 0;
         Matcher matcher = pat.p.matcher(str);
@@ -2050,7 +2225,9 @@ EOT
                 if (pos <= str.length()) {
                     buf.append( str.substring(pos) );
                 }
-                s.set(new PlString(buf.toString()));
+                if (replace_flag) {
+                    s.set(new PlString(buf.toString()));
+                }
             }
         }
         else {
@@ -2069,7 +2246,9 @@ EOT
                 if (end <= str.length()) {
                     buf.append( str.substring(end) );
                 }
-                s.set(new PlString(buf.toString()));
+                if (replace_flag) {
+                    s.set(new PlString(buf.toString()));
+                }
             }
         }
         if (count == 0) {
@@ -2079,25 +2258,33 @@ EOT
         return new PlInt(count);
     }
 
-    public static final PlObject replace(PlLvalue s, PlRegex pat, PlObject rep, int want, boolean global) {
+    public static final PlObject replace(PlLvalue s, PlRegex pat, PlObject rep, int want, boolean global, boolean replace_flag) {
         if (rep.is_coderef()) {
-            return replace(s, pat, (PlClosure)rep, want, global);
+            return replace(s, pat, (PlClosure)rep, want, global, replace_flag);
         }
-        return replace(s, pat, rep.toString(), want, global);
+        return replace(s, pat, rep.toString(), want, global, replace_flag);
     }
-    public static final PlObject replace(PlObject s, PlObject pat, PlObject rep, int want, boolean global) {
+    public static final PlObject replace(PlObject s, PlObject pat, PlObject rep, int want, boolean global, boolean replace_flag) {
         if (!s.is_lvalue()) {
+            if (!replace_flag) {
+                PlLvalue lv = new PlLvalue(s);
+                return replace(lv, new PlRegex(pat, 0, false), rep, want, global, replace_flag);
+            }
             PlCORE.die("Can't modify constant item in substitution (s///)");
         }
         // TODO - cache the compiled pattern
-        return replace((PlLvalue)s, new PlRegex(pat, 0, false), rep, want, global);
+        return replace((PlLvalue)s, new PlRegex(pat, 0, false), rep, want, global, replace_flag);
     }
-    public static final PlObject replace(PlObject s, PlObject pat, String rep, int want, boolean global) {
+    public static final PlObject replace(PlObject s, PlObject pat, String rep, int want, boolean global, boolean replace_flag) {
         if (!s.is_lvalue()) {
+            if (!replace_flag) {
+                PlLvalue lv = new PlLvalue(s);
+                return replace(lv, new PlRegex(pat, 0, false), rep, want, global, replace_flag);
+            }
             PlCORE.die("Can't modify constant item in substitution (s///)");
         }
         // TODO - cache the compiled pattern
-        return replace((PlLvalue)s, new PlRegex(pat, 0, false), rep, want, global);
+        return replace((PlLvalue)s, new PlRegex(pat, 0, false), rep, want, global, replace_flag);
     }
 
     // $v =~ tr/xyz/abc/i
@@ -2106,7 +2293,8 @@ EOT
         String str          = pstr.toString();
         String searchChars  = psearchChars.toString();
         String replaceChars = preplaceChars.toString();
-        boolean complement = modifier.indexOf("c") < 0 ? false : true;  // c = complement
+        boolean complement   = modifier.indexOf("c") < 0 ? false : true;  // c = complement
+        boolean replace_flag = modifier.indexOf("r") < 0 ? true : false;  // r = replace flag
         int modified = 0;
         final int replaceCharsLength = replaceChars.length();
         final int strLength = str.length();
@@ -2142,7 +2330,7 @@ EOT
             }
         }
 
-        if (modified > 0) {
+        if (modified > 0 && replace_flag) {
             pstr.set(new PlString(buf.toString()));
         }
         return new PlInt(modified);
@@ -2379,19 +2567,26 @@ class PlV {
     // PlV implements namespaces and global variables
     //
     // TODO - import CORE subroutines in new namespaces, if needed
-    // TODO - cache lookups in lexical variables (see PlClosure implementation)
-
-    public static final PlHash svar = new PlHash(); // scalar
-    public static final PlHash cvar = new PlHash(); // code
-    public static final PlHash avar = new PlHash(); // array
-    public static final PlHash hvar = new PlHash(); // hash
-    public static final PlHash fvar = new PlHash(); // file
 
     public static PlRegexResult regex_result = new PlRegexResult();
     public static Path path;
-    public static PlFileHandle STDIN  = new PlFileHandle();
-    public static PlFileHandle STDOUT = new PlFileHandle();
-    public static PlFileHandle STDERR = new PlFileHandle();
+    public static PlFileHandle STDIN  = (PlFileHandle)PlStringConstant.getConstant("main::STDIN").fileRef.o;
+    public static PlFileHandle STDOUT = (PlFileHandle)PlStringConstant.getConstant("main::STDOUT").fileRef.o;
+    public static PlFileHandle STDERR = (PlFileHandle)PlStringConstant.getConstant("main::STDERR").fileRef.o;
+
+    // initialize special variables like $_ $\
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $index     = $special_var_index{$_}[0];
+                my $class     = $special_var_index{$_}[1];
+"
+    public static $class $java_name = new $class();    // \$$_
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
 
     public static PlObject boolean_stack;
     public static PlArray local_stack = new PlArray();
@@ -2399,7 +2594,9 @@ class PlV {
     public static String lastStat = null;
 
     public static final void init(String[] args) {
+        // @ARGV
         PlV.array_set("main::ARGV", new PlArray(args));               // args is String[]
+        // %ENV
         PlV.hash_set("main::ENV",   new PlArray(System.getenv()));    // env  is Map<String, String>
         // $" = " "
         PlV.sset("main::" + (char)34, new PlString(" "));
@@ -2417,14 +2614,17 @@ class PlV {
         PlV.STDIN.eof           = false;
         PlV.STDIN.typeglob_name = "main::STDIN";
         PlV.STDIN.charset       = "UTF-8";
+        PlFileHandle.allOpenFiles.add(PlV.STDIN);
 
         PlV.STDOUT.outputStream = System.out;
         PlV.STDOUT.typeglob_name = "main::STDOUT";
         PlV.STDOUT.charset       = "UTF-8";
+        PlFileHandle.allOpenFiles.add(PlV.STDOUT);
 
         PlV.STDERR.outputStream = System.err;
         PlV.STDERR.typeglob_name = "main::STDERR";
         PlV.STDERR.charset       = "UTF-8";
+        PlFileHandle.allOpenFiles.add(PlV.STDERR);
 
         try {
             PlV.path = Paths.get(".").toRealPath();
@@ -2485,30 +2685,74 @@ class PlV {
 
         PerlOp.reset_match();
     }
+    public static final void teardown() {
+
+        // TODO - catch error in END
+        // Perlito5::set_global_phase("END");
+        // eval {
+        //     $_->() for @Perlito5::END_BLOCK;
+        //     1;
+        // }
+        // or warn "$@\nEND failed--call queue aborted.\n"
+
+        // Perlito5::set_global_phase("END");
+        PlV.sset("main::" + (char)7 + "LOBAL_PHASE", new PlStringConstant("END"));
+
+        // $_->() for @Perlito5::END_BLOCK;
+        for (PlObject tmp : PlArray.construct_list_of_aliases(PlV.array_get("Perlito5::END_BLOCK"))) {
+            tmp.apply(PlCx.VOID, new PlArray());
+        }
+
+        PlFileHandle.close_all_files();
+    }
 
     // scalar
     public static final PlLvalue sget(String name) {
-        return (PlLvalue)svar.hget_lvalue(name);
+        return PlStringConstant.getConstant(name).scalarRef;
     }
     public static final PlLvalue sget_local(String name) {
-        return (PlLvalue)svar.hget_lvalue_local(name);
+        return (PlLvalue)PerlOp.push_local_scalar(PlCx.UNDEF, name);
     }
     public static final PlObject sset(String name, PlObject v) {
-        return (PlLvalue)svar.hget_lvalue(name).set(v);
+        return PlStringConstant.getConstant(name).scalarRef.set(v);
     }
     public static final PlObject sset(String name, Object o) {
-        return (PlLvalue)svar.hget_lvalue(name).set( PlJavaObject.fromObject(o) );
+        return PlStringConstant.getConstant(name).scalarRef.set(PlJavaObject.fromObject(o));
     }
     public static final PlObject sset_local(String name, PlObject v) {
-        return svar.hget_lvalue_local(name).set(v);
+        return PerlOp.push_local_scalar(v, name);
     }
     public static final void sset_alias(String name, PlLvalue v) {
-        svar.hset_alias(name, v);
+        PlStringConstant.getConstant(name).scalarRef = v;
     }
+
+    // accessors for special variables like $_ $\
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $index     = $special_var_index{$_}[0];
+                my $class     = $special_var_index{$_}[1];
+"
+    public static final PlLvalue sget_local_${java_name}() {
+        PerlOp.push_local_special_var_${java_name}();
+        return ${java_name};
+    }
+    public static final PlObject sset_local_${java_name}(PlObject v) {
+        PerlOp.push_local_special_var_${java_name}();
+        return ${java_name}.set(v);
+    }
+    public static final void sset_alias_${java_name}(${class} v) {
+        ${java_name} = v;
+    }
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
 
     public static final PlLvalue cget(String name) {
         // this implements " \&name "
-        PlLvalue code = (PlLvalue)cvar.hget_lvalue(name);
+        PlLvalue code = PlStringConstant.getConstant(name).codeRef;
         if ( code.is_coderef() ) {
             return code;
         }
@@ -2528,118 +2772,97 @@ class PlV {
         return (PlLvalue)PerlOp.push_local_named_sub(PlCx.UNDEF, name);
     }
     public static final PlLvalue cget_no_autoload(String name) {
-        return (PlLvalue)cvar.hget_lvalue(name);
+        return PlStringConstant.getConstant(name).codeRef;
     }
     public static final PlObject cset(String name, PlObject v) {
-        // TODO - invalidate the method lookup cache
-        PlStringConstant.getConstant(name).setCodeRef(v);    // apply() cache
-        return cvar.hset(name, v);
+        return PlStringConstant.getConstant(name).cset(v);
     }
     public static final PlObject cset_local(String name, PlObject v) {
         return PerlOp.push_local_named_sub(v, name);
     }
     public static final void cset_alias(String name, PlLvalue v) {
-        // TODO - invalidate the method lookup cache
-        PlStringConstant.getConstant(name).setCodeRef(v);    // apply() cache
-        cvar.hset_alias(name, v);
+        PlStringConstant.getConstant(name).cset_alias(v);
     }
 
     // hash
     public static final PlHash hash_get(String name) {
-        return (PlHash)hvar.hget_hashref(name).hash_deref_strict();
+        return PlStringConstant.getConstant(name).hashRef.hash_deref_strict();
     }
     public static final PlHash hash_get_local(String name) {
-        PlLvalue o = (PlLvalue)hvar.hget_lvalue_local(name);
-        PlHashRef hr = new PlHashRef();
-        o.set(hr);
-        return hr.hash_deref_strict();
+        PlLvalue o = (PlLvalue)PerlOp.push_local_hash(new PlHashRef(), name);
+        return o.hash_deref_strict();
     }
     public static final PlObject hash_set(String name, PlObject v) {
-        return hvar.hget_hashref(name).hash_deref_set(v);
+        PlLvalue o = PlStringConstant.getConstant(name).hashRef;
+        return o.hash_deref_set(v);
     }
     public static final PlObject hash_set_local(String name, PlObject v) {
-        return hvar.hget_lvalue_local(name).get_hashref().hash_deref_set(v);
+        PlLvalue o = (PlLvalue)PerlOp.push_local_hash(new PlHashRef(), name);
+        return o.hash_deref_set(v);
     }
     public static final PlLvalue hget(String name) {
-        return (PlLvalue)hvar.hget_lvalue(name);
+        return PlStringConstant.getConstant(name).hashRef;
     }
     public static final PlLvalue hget_local(String name) {
-        return (PlLvalue)hvar.hget_lvalue_local(name);
+        return (PlLvalue)PerlOp.push_local_hash(new PlHashRef(), name);
     }
     public static final PlObject hset(String name, PlObject v) {
-        return hvar.hset(name, v);
+        return PlStringConstant.getConstant(name).hashRef.set(v);
+    }
+    public static final PlObject hset(String name, PlLvalue v) {
+        return PlStringConstant.getConstant(name).hashRef.set(v);
     }
     public static final PlObject hset_local(String name, PlObject v) {
-        return hvar.hget_lvalue_local(name).set(v);
+        return (PlLvalue)PerlOp.push_local_hash(v, name);
     }
     public static final void hset_alias(String name, PlHash v) {
-        hvar.hset_alias(name, v);
+        PlStringConstant.getConstant(name).hashRef = new PlLvalue(v);
     }
 
     // array
     public static final PlArray array_get(String name) {
-        return (PlArray)avar.hget_arrayref(name).array_deref_strict();
+        return PlStringConstant.getConstant(name).arrayRef.array_deref_strict();
     }
     public static final PlArray array_get_local(String name) {
-        PlLvalue o = (PlLvalue)avar.hget_lvalue_local(name);
-        PlArrayRef ar = new PlArrayRef();
-        o.set(ar);
-        return ar.array_deref_strict();
+        PlLvalue o = (PlLvalue)PerlOp.push_local_array(new PlArrayRef(), name);
+        return o.array_deref_strict();
     }
     public static final PlObject array_set(String name, PlObject v) {
-        return avar.hget_arrayref(name).array_deref_set(v);
+        PlLvalue o = PlStringConstant.getConstant(name).arrayRef;
+        return o.array_deref_set(v);
     }
     public static final PlObject array_set_local(String name, PlObject v) {
-        return avar.hget_lvalue_local(name).get_arrayref().array_deref_set(v);
+        PlLvalue o = (PlLvalue)PerlOp.push_local_array(new PlArrayRef(), name);
+        return o.array_deref_set(v);
     }
     public static final PlLvalue aget(String name) {
-        return (PlLvalue)avar.hget_lvalue(name);
+        return PlStringConstant.getConstant(name).arrayRef;
     }
     public static final PlLvalue aget_local(String name) {
-        return (PlLvalue)avar.hget_lvalue_local(name);
+        return (PlLvalue)PerlOp.push_local_array(new PlArrayRef(), name);
     }
     public static final PlObject aset(String name, PlObject v) {
-        return avar.hset(name, v);
+        return PlStringConstant.getConstant(name).arrayRef.array_deref_set(v);
     }
     public static final PlObject aset_local(String name, PlObject v) {
-        return avar.hget_lvalue_local(name).set(v);
+        return (PlLvalue)PerlOp.push_local_array(v, name);
     }
     public static final void aset_alias(String name, PlArray v) {
-        avar.hset_alias(name, v);
+        PlStringConstant.getConstant(name).arrayRef = new PlLvalue(v);
     }
 
     // filehandle
     public static final PlLvalue fget(String name) {
-        PlLvalue v = (PlLvalue)fvar.hget_lvalue(name);
-        if (v.is_undef()) {
-            // autovivification to filehandle
-            PlFileHandle f = new PlFileHandle();
-            if (name.equals("main::ARGV")) {
-                f.is_argv = true;
-            }
-            f.typeglob_name = name;
-            v.set(f);
-        }
-        return v;
+        return PlStringConstant.getConstant(name).fileRef;
     }
     public static final PlLvalue fget_local(String name) {
-        PlLvalue v = (PlLvalue)fvar.hget_lvalue_local(name);
-        if (v.is_undef()) {
-            // autovivification to filehandle
-            PlFileHandle f = new PlFileHandle();
-            if (name.equals("main::ARGV")) {
-                f.is_argv = true;
-            }
-            f.typeglob_name = name;
-            v.set(f);
-        }
-        return v;
+        return (PlLvalue)PerlOp.push_local_array(new PlFileHandle(name), name);
     }
     public static final PlObject fset(String name, PlObject v) {
-        return fvar.hset(name, v);
+        return PlStringConstant.getConstant(name).fileRef.set(v);
     }
     public static final PlObject fset_local(String name, PlObject v) {
-        return fvar.hget_lvalue_local(name).set(v);
+        return (PlLvalue)PerlOp.push_local_array(v, name);
     }
 
     // code
@@ -2684,7 +2907,7 @@ class PlV {
             PlV.hset(name, value);
         }
         else if (value.is_arrayref()) {
-            PlV.aset(name, value);
+            PlStringConstant.getConstant(name).arrayRef.set(value);
         }
         else if (value.is_scalarref()) {
             PlV.sset(name, value.scalar_deref(nameSpace));
@@ -2784,7 +3007,8 @@ class PlV {
 
 }
 class PlObject implements Cloneable, Iterable<PlObject> {
-    public static final PlStringConstant REF = new PlStringConstant("");
+    public static final String REF_str = new String("");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
 
     public Iterator<PlObject> iterator() {
         // if (this.is_array()) {
@@ -2817,6 +3041,7 @@ EOT
                   . "        return null;\n"
                   . "    }\n" : ()
             }
+            grep { $java_classes{$_}{perl_to_java} }
             sort keys %java_classes
       ))
     , <<'EOT'
@@ -2914,6 +3139,13 @@ EOT
     public char to_char() {
         return (char)(this.to_int());
     }
+    public PlObject pos() {
+        return PlCx.UNDEF;
+    }
+    public PlObject set_pos(PlObject value) {
+        return PlCORE.die("Can't modify constant item in match position");
+    }
+
     public PlObject end_of_array_index() {
         return PlCORE.die("Not an ARRAY reference");
     }
@@ -2924,7 +3156,7 @@ EOT
         // $ perl -e ' $a = 5; $a->() '
         // Undefined subroutine &main::5 called
         String name = this.toString();
-        PlObject code = PlV.cvar.hget(name);
+        PlObject code = PlStringConstant.getConstant(name).codeRef;
         if ( code.is_coderef() ) {
             return code.apply(want, List__);
         }
@@ -2940,7 +3172,7 @@ EOT
         return PlCORE.die("Undefined subroutine &" + name + " called");
     }
 
-    public PlObject length() {
+    public PlScalarImmutable length() {
         return new PlInt(this.toString().length());
     }
     public PlObject get_arrayref() {
@@ -2955,9 +3187,6 @@ EOT
         return PlCORE.die("Not a HASH reference");
     }
 
-    public PlObject hget_scalarref(PlObject i) {
-        return this.hget_scalarref(i.toString());
-    }
     public PlObject hget_scalarref(String i) {
         PlCORE.die("Not a SCALAR reference");
         return this;
@@ -2980,14 +3209,8 @@ EOT
         }
         return PlCORE.die("Not an ARRAY");
     }
-    public PlObject aget_lvalue(PlObject i) {
-        return this.aget_lvalue(i.to_int());
-    }
     public PlObject aget_lvalue(int i) {
         return PlCORE.die("Not an ARRAY reference");
-    }
-    public PlObject aget_scalarref(PlObject i) {
-        return this.aget_scalarref(i.to_int());
     }
     public PlObject aget_scalarref(int i) {
         PlCORE.die("Not a SCALAR reference");
@@ -3011,30 +3234,18 @@ EOT
         return this;
     }
 
-    public PlObject hget_arrayref(PlObject i) {
-        return this.hget_arrayref(i.toString());
-    }
     public PlObject hget_arrayref(String i) {
         PlCORE.die("Not a HASH reference");
         return this;
-    }
-    public PlObject hget_hashref(PlObject i) {
-        return this.hget_hashref(i.toString());
     }
     public PlObject hget_hashref(String i) {
         PlCORE.die("Not a HASH reference");
         return this;
     }
 
-    public PlObject aget_arrayref(PlObject i) {
-        return this.aget_arrayref(i.to_int());
-    }
     public PlObject aget_arrayref(int i) {
         PlCORE.die("Not an ARRAY reference");
         return this;
-    }
-    public PlObject aget_hashref(PlObject i) {
-        return this.aget_hashref(i.to_int());
     }
     public PlObject aget_hashref(int i) {
         PlCORE.die("Not an ARRAY reference");
@@ -3045,49 +3256,37 @@ EOT
         PlCORE.die("Not a HASH reference");
         return this;
     }
-    public PlObject hash_deref_strict() {
+    public PlHash hash_deref_strict() {
         PlCORE.die("Not a HASH reference");
-        return this;
+        return (PlHash)this;
     }
     public PlObject hash_deref_set(PlObject i) {
         PlCORE.die("Not a HASH reference");
         return this;
     }
 
-    public PlObject hget(PlObject i) {
-        PlCORE.die("Not a HASH reference");
-        return this;
-    }
     public PlObject hget(String i) {
         PlCORE.die("Not a HASH reference");
         return this;
     }
-    public PlObject hget_lvalue(PlObject i) {
-        return this.hget_lvalue(i.toString());
-    }
     public PlObject hget_lvalue(String i) {
         PlCORE.die("Not a HASH reference");
         return this;
-    }
-    public PlObject hget_lvalue_local(PlObject i) {
-        return this.hget_lvalue_local(i.toString());
     }
     public PlObject hget_lvalue_local(String i) {
         PlCORE.die("Not a HASH reference");
         return this;
     }
 
-    public PlObject hset(PlObject s, PlObject v) {
-        return this.hset(s.toString(), v);
-    }
     public PlObject hset(String s, PlObject v) {
         PlCORE.die("Not a HASH reference");
         return this;
     }
-
-    public PlObject aget(PlObject i) {
-        return this.aget(i.to_int());
+    public PlObject hset(String s, PlLvalue v) {
+        PlCORE.die("Not a HASH reference");
+        return this;
     }
+
     public PlObject aget(int i) {
         PlCORE.die("Not an ARRAY reference");
         return this;
@@ -3096,16 +3295,18 @@ EOT
         PlCORE.die("Not an ARRAY reference");
         return this;
     }
-    public PlObject aset(PlObject i, PlObject v) {
-        return this.aset(i.to_int(), v);
-    }
+
     public PlObject to_array() {
         PlCORE.die("Not an ARRAY reference");
         return this;
     }
-    public PlObject length_of_array() {
+    public PlScalarImmutable length_of_array() {
         PlCORE.die("Not an ARRAY reference");
-        return this;
+        return PlCx.UNDEF;
+    }
+    public boolean length_of_array_boolean() {
+        PlCORE.die("Not an ARRAY reference");
+        return false;
     }
     public int length_of_array_int() {
         return 1;
@@ -3224,8 +3425,8 @@ EOT
         }
         return PlCORE.die("Illegal number of bits in vec: " + bits);
     }
-    public PlObject get() {
-        return PlCORE.die("error .get!");
+    public PlScalarImmutable get() {
+        return (PlScalarImmutable)this;
     }
     public PlObject mod(PlObject o) {
         return this.to_num().mod(o);
@@ -3246,6 +3447,10 @@ EOT
     public boolean is_JavaObject() {
         return false;
     }
+    public Object toJava() {
+        return this;
+    }
+ 
     public boolean is_hash() {
         return false;
     }
@@ -3256,9 +3461,6 @@ EOT
         return false;
     }
     public boolean is_lvalue() {
-        return false;
-    }
-    public boolean is_tiedScalar() {
         return false;
     }
     public boolean is_regex_result() {
@@ -3276,6 +3478,12 @@ EOT
     public PlString ref() {
         return REF;
     }
+    public String ref_str() {
+        return REF_str;
+    }
+    public boolean ref_boolean() {
+        return false;
+    }
     public PlObject refaddr() {
         // Scalar::Util::refaddr()
         return PlCx.UNDEF;
@@ -3289,7 +3497,7 @@ EOT
             StringBuilder sb = new StringBuilder();
             PlClass bless = this.blessed_class();
             if ( bless != null ) {
-                sb.append(this.ref().toString());
+                sb.append(this.ref_str());
                 sb.append("=");
             }
             sb.append(this.reftype().toString());
@@ -3432,10 +3640,10 @@ EOT
         }
         return new PlInt(s.lastIndexOf(s1, i));
     }
-    public PlObject substr(PlObject offset) {
+    public PlObject substr(int offset) {
         // substr EXPR,OFFSET
         String s = this.toString();
-        int ofs = offset.to_int();
+        int ofs = offset;
         if (ofs < 0) {
             ofs = s.length() + ofs;
         }
@@ -3447,11 +3655,11 @@ EOT
         }
         return new PlString(s.substring(ofs));
     }
-    public PlObject substr(PlObject offset, PlObject length) {
+    public PlObject substr(int offset, int length) {
         // substr EXPR,OFFSET,LENGTH
         String s = this.toString();
-        int ofs = offset.to_int();
-        int len = length.to_int();
+        int ofs = offset;
+        int len = length;
         if (ofs < 0) {
             ofs = s.length() + ofs;
         }
@@ -3477,11 +3685,11 @@ EOT
         }
         return new PlString(s.substring(ofs, len));
     }
-    public PlObject substr(PlObject offset, PlObject length, PlObject replacement) {
+    public PlObject substr(int offset, int length, PlObject replacement) {
         // substr EXPR,OFFSET,LENGTH,REPLACEMENT
         String s = this.toString();
-        int ofs = offset.to_int();
-        int len = length.to_int();
+        int ofs = offset;
+        int len = length;
         if (ofs < 0) {
             ofs = s.length() + ofs;
         }
@@ -3519,10 +3727,10 @@ EOT
         this.set( new PlString( start + replacement.toString() + end ) );
         return ret;
     }
-    public PlObject lvalue_substr(PlObject offset) {
-        return this.lvalue_substr(offset, new PlInt(this.toString().length()));
+    public PlObject lvalue_substr(int offset) {
+        return this.lvalue_substr(offset, this.toString().length());
     }
-    public PlObject lvalue_substr(PlObject offset, PlObject length) {
+    public PlObject lvalue_substr(int offset, int length) {
         if (this.is_lvalue()) {
             return new PlLvalueSubstring(this, offset, length);
         }
@@ -3535,8 +3743,11 @@ EOT
     public PlClass blessed_class() {
         return null;
     }
-    public PlObject scalar() {
-        return this;
+    public PlObject set_prototype(PlObject v) {
+        return PlCORE.die("Type of arg 1 to Scalar::Util::set_prototype must be block or sub {}");
+    }
+    public PlScalarImmutable scalar() {
+        return (PlScalarImmutable)this;
     }
     public PlObject clone() throws CloneNotSupportedException {
         return this;
@@ -3601,7 +3812,7 @@ EOT
             for (PlObject aa : arg2) {
                 PlObject rr = this.smartmatch(aa);
                 if (rr.to_boolean()) {
-                    ret.push(rr);
+                    ret.push_void(rr);
                 }
             }
             return ret;
@@ -3682,8 +3893,24 @@ EOT
 
     , <<'EOT'
 }
-class PlReference extends PlObject {
-    public static final PlStringConstant REF = new PlStringConstant("REF");
+class PlScalarObject extends PlObject {
+    public PlScalarObject() {
+    }
+}
+class PlScalarImmutable extends PlScalarObject {
+    public PlScalarImmutable() {
+    }
+
+    public PlScalarImmutable get() {
+        return this;
+    }
+    public PlScalarImmutable scalar() {
+        return this;
+    }
+}
+class PlReference extends PlScalarImmutable {
+    public static final String REF_str = new String("REF");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
     public PlClass bless;
 
     public boolean is_ref() {
@@ -3704,6 +3931,17 @@ class PlReference extends PlObject {
         else {
             return this.bless.plClassName();
         }
+    }
+    public String ref_str() {
+        if ( this.bless == null ) {
+            return this.REF_str;
+        }
+        else {
+            return this.bless.className();
+        }
+    }
+    public boolean ref_boolean() {
+        return true;
     }
 
     public PlInt refaddr() {
@@ -3736,6 +3974,9 @@ class PlReference extends PlObject {
     }
     public PlObject to_num() {
         return PlClass.overload_to_number(this);
+    }
+    public int to_int() {
+        return PlClass.overload_to_number(this).to_int();
     }
     public long to_long() {
         return PlClass.overload_to_number(this).to_long();
@@ -3792,7 +4033,8 @@ EOT
     , <<'EOT'
 }
 class PlGlobRef extends PlReference {
-    public static final PlStringConstant REF = new PlStringConstant("GLOB");
+    public static final String REF_str = new String("GLOB");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
     public PlFileHandle filehandle;
 
     public PlGlobRef(PlFileHandle filehandle) {
@@ -3816,6 +4058,18 @@ class PlGlobRef extends PlReference {
             return this.bless.plClassName();
         }
     }
+    public String ref_str() {
+        if ( this.bless == null ) {
+            return REF_str;
+        }
+        else {
+            return this.bless.className();
+        }
+    }
+    public boolean ref_boolean() {
+        return true;
+    }
+
     public PlObject reftype() {
         return REF;
     }
@@ -3826,6 +4080,9 @@ class PlGlobRef extends PlReference {
     }
     public PlObject hset(String s, PlObject v) {
         return this.filehandle.hset(s, v);
+    }
+    public PlObject hset(String s, PlLvalue v) {
+        return this.filehandle.hset(s, v.get());
     }
 }
 
@@ -3868,8 +4125,9 @@ class PlStringReader extends Reader{
     }
 }
 
-class PlFileHandle extends PlObject {
-    // public static final PlStringConstant REF = new PlStringConstant("GLOB");
+class PlFileHandle extends PlScalarImmutable {
+    // public static final String REF_str = new String("GLOB");
+    // public static final PlStringConstant REF = new PlStringConstant(REF_str);
     public String  typeglob_name;
     public OutputStream outputStream;    // System.out, System.err
     public InputStream inputStream;     // System.in
@@ -3877,21 +4135,148 @@ class PlFileHandle extends PlObject {
     public DirectoryStream<Path> directoryStream;
     public Reader  reader;       // Console.reader
     public StringBuilder readlineBuffer;
+    public StringBuilder printBuffer;
     public boolean eof;
     public boolean is_argv;
-    public Path    path;     // filename
+    public Path    path;     // filename, can be null
     public String  mode;     // ">", "+<"
     public String  charset;  // "UTF-8"
     public boolean binmode;
+    public boolean output_autoflush;
+    public PlObject tied;
+
+    public static final int BUFFER_SIZE = 4096;
+    public static final int BUFFER_THRESHOLD = BUFFER_SIZE - 256;
+    public static HashSet<PlFileHandle> allOpenFiles = new HashSet<PlFileHandle>();
 
     public PlFileHandle() {
         this.readlineBuffer = new StringBuilder();
+        this.printBuffer = new StringBuilder(PlFileHandle.BUFFER_SIZE);
         this.eof = true;
         this.is_argv = false;
         this.binmode = false;
+        this.output_autoflush = false;
     }
+
+    public PlFileHandle(String name) {
+        this();     // call the base constructor
+        if (name.equals("main::ARGV")) {
+            this.is_argv = true;
+        }
+        this.typeglob_name = name;
+    }
+
+    public void dupFileHandle(PlFileHandle o) {
+        this.typeglob_name =     o.typeglob_name;
+        this.outputStream =      o.outputStream;    // System.out, System.err
+        this.inputStream =       o.inputStream;     // System.in
+        this.directoryIterator = o.directoryIterator;
+        this.directoryStream =   o.directoryStream;
+        this.reader =            o.reader;       // Console.reader
+        this.readlineBuffer =    o.readlineBuffer;
+        this.printBuffer =       o.printBuffer;
+        this.eof =               o.eof;
+        this.is_argv =           o.is_argv;
+        this.path =              o.path;     // filename
+        this.mode =              o.mode;     // ">", "+<"
+        this.charset =           o.charset;  // "UTF-8"
+        this.binmode =           o.binmode;
+        this.output_autoflush =  o.output_autoflush;
+        this.tied =              o.tied;
+    }
+
     public boolean is_filehandle() {
         return true;
+    }
+
+    // tie "handle"
+    public PlObject tie(PlArray args) {
+        if (this.tied != null) {
+            this.untie();
+        }
+        PlObject self = PerlOp.call("TIEHANDLE", args, PlCx.VOID);
+        this.tied = self;
+        return self;
+    }
+
+    public PlObject untie() {
+        if (this.tied != null) {
+            PlObject tied = this.tied;
+            PlObject untie = PerlOp.call("can", new PlArray(tied, new PlString("UNTIE")), PlCx.SCALAR);
+            if (untie.to_boolean()) {
+                untie.apply(PlCx.VOID, new PlArray(tied));
+            };
+            this.tied = null;
+            return tied;
+        }
+        return this;
+    }
+    public PlObject tied() {
+        if (this.tied != null) {
+            return this.tied;
+        }
+        return PlCx.UNDEF;
+    }
+ 
+    public static void close_all_files() {
+        // called at teardown - program finish, die() or exit()
+        // Note: this is also called when the compiler finishes loading (the compiler is a Perl program)
+        // System.out.println("PlFileHandle.close_all_files");
+        for ( PlFileHandle fh : allOpenFiles ) {
+            try {
+                fh.flush();     // not sure if we should close STDOUT and STDERR
+            }
+            catch(Exception e) {
+                PlV.sset("main::!", new PlStringLazyError(e));
+            }
+        }
+    }
+    public PlObject set_autoflush(PlObject o) {
+        this.output_autoflush = o.to_boolean();
+        if (this.output_autoflush) {
+            try {
+                this.flush();
+            }
+            catch(Exception e) {
+                PlV.sset("main::!", new PlStringLazyError(e));
+            }
+        }
+        return o;
+    }
+    public void flush() throws IOException, UnsupportedEncodingException {
+        // System.out.println("PlFileHandle.flush " + typeglob_name);
+        if (this.outputStream == null) {
+            return;
+        }
+        if (this.binmode) {
+            StringBuilder s = this.printBuffer;
+            int ll = s.length();
+            byte[] bytes = new byte[ll];
+            for (int i2 = 0; i2 < ll; i2++) {
+                bytes[i2] = (byte)(s.charAt(i2));
+            }
+            this.outputStream.write(bytes);
+        }
+        else {
+            String s = this.printBuffer.toString();
+            byte[] bytes = s.getBytes(this.charset);
+            this.outputStream.write(bytes);
+        }
+        // this.printBuffer = new StringBuilder(PlFileHandle.BUFFER_SIZE);
+        // this.outputStream.flush();   // no need to flush when using write()
+        this.printBuffer.setLength(0);
+    }
+    public void close() throws IOException {
+        this.readlineBuffer = new StringBuilder();
+        this.eof = true;
+        if (this.outputStream != null) {
+            this.flush();
+            this.outputStream.close();
+        }
+        if (this.reader != null) {
+            this.reader.close();
+        }
+        PlFileHandle.allOpenFiles.remove(this);
     }
     public String toString() {
         if (this.typeglob_name == null) {
@@ -3907,15 +4292,23 @@ class PlFileHandle extends PlObject {
         // PlCORE.say( "PlFileHandle.setUndef " + typeglob_name);
 
         PlString name = new PlString(typeglob_name);
-        PlV.cvar.hdelete(PlCx.VOID, name);
-        PlV.svar.hdelete(PlCx.VOID, name);
-        PlV.avar.hdelete(PlCx.VOID, name);
-        PlV.fvar.hdelete(PlCx.VOID, name);
+
+        try {
+            // close filehandle if needed
+            this.close();
+        }
+        catch(Exception e) {
+            PlV.sset("main::!", new PlStringLazyError(e));
+        }
+
+        PlStringConstant glob = PlStringConstant.getConstant(typeglob_name);
+        glob.cset(PlCx.UNDEF);
+        glob.scalarRef.set(PlCx.UNDEF);
+        glob.arrayRef.set(new PlArrayRef());
+        glob.hashRef.set(new PlHashRef());
+        glob.fileRef.set(new PlFileHandle(typeglob_name));
         if (typeglob_name.endsWith("::")) {
             // TODO - undefine inner symbol table
-        }
-        else {
-            PlV.hvar.hdelete(PlCx.VOID, name);
         }
         return PlCx.UNDEF; 
     }
@@ -3967,6 +4360,9 @@ class PlFileHandle extends PlObject {
     public PlObject hset(String s, PlObject v) {
         return PlCORE.die("Can't modify glob elem in scalar assignment");
     }
+    public PlObject hset(String s, PlLvalue v) {
+        return PlCORE.die("Can't modify glob elem in scalar assignment");
+    }
     public PlObject hget_scalarref(String i) {
         return this.hget(i);
     }
@@ -3979,12 +4375,32 @@ EOT
     ,   # list break
 <<'EOT'
 
+class PlLvalueSpecialVarAutoflush extends PlLvalue {
+    // the $| variable
+    public PlObject set(PlObject o) {
+        // System.out.println("Set autoflush " + (o.to_boolean() ? "1" : "0"));
+        PlV.STDOUT.set_autoflush(o);
+        return super.set(o);
+    }
+    public PlObject set(PlScalarImmutable o) {
+        return this.set((PlObject)o);
+    }
+    public PlObject set(PlLvalue o) {
+        return this.set((PlObject)o.get());
+    }
+}
+
+EOT
+    ,   # list break
+<<'EOT'
+
 class PlRegex extends PlReference {
     public Pattern p;
     public String  original_string;
     // public Matcher m;
     public boolean flag_xx;
-    public static final PlStringConstant REF = new PlStringConstant("Regexp");
+    public static final String REF_str = new String("Regexp");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
 
     public PlRegex(String p, int flags, boolean flag_xx) {
         this.flag_xx = flag_xx;
@@ -4010,6 +4426,18 @@ class PlRegex extends PlReference {
             return this.bless.plClassName();
         }
     }
+    public String ref_str() {
+        if ( this.bless == null ) {
+            return REF_str;
+        }
+        else {
+            return this.bless.className();
+        }
+    }
+    public boolean ref_boolean() {
+        return true;
+    }
+
     public PlObject reftype() {
         return REF;
     }
@@ -4060,7 +4488,7 @@ class PlRegex extends PlReference {
         return true;
     }
 }
-class PlRegexResult extends PlObject {
+class PlRegexResult extends PlScalarImmutable {
     public Matcher matcher;      // regex captures
     public String  regex_string; // last string used in a regex
 
@@ -4072,7 +4500,8 @@ class PlClosure extends PlReference implements Runnable {
     public PlObject[] env;       // new PlObject[]{ v1, v2, v3 }
     public PlObject prototype;   // '$$$'
     public String pkg_name;      // 'main'
-    public static final PlStringConstant REF = new PlStringConstant("CODE");
+    public static final String REF_str = new String("CODE");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
     public PlClosure currentSub;
     public boolean is_defined;
     // metadata for caller()
@@ -4179,6 +4608,18 @@ class PlClosure extends PlReference implements Runnable {
             return this.bless.plClassName();
         }
     }
+    public String ref_str() {
+        if ( this.bless == null ) {
+            return REF_str;
+        }
+        else {
+            return this.bless.className();
+        }
+    }
+    public boolean ref_boolean() {
+        return true;
+    }
+
     public PlObject reftype() {
         return REF;
     }
@@ -4191,10 +4632,14 @@ class PlClosure extends PlReference implements Runnable {
     public PlObject prototype() {
         return this.prototype;
     }
+    public PlObject set_prototype(PlObject v) {
+        return this.prototype = new PlString(v.toString());
+    }
 }
 class PlLvalueRef extends PlReference {
     private PlObject o;
-    public static final PlStringConstant REF = new PlStringConstant("SCALAR");
+    public static final String REF_str = new String("SCALAR");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
     public static final PlString REF_REF = new PlString("REF");
 
     public PlString ref() {
@@ -4208,6 +4653,21 @@ class PlLvalueRef extends PlReference {
             return this.bless.plClassName();
         }
     }
+    public String ref_str() {
+        if ( this.bless == null ) {
+            if ( this.o.is_ref() ) {
+                return REF_REF.toString();
+            }
+            return REF_str;
+        }
+        else {
+            return this.bless.className();
+        }
+    }
+    public boolean ref_boolean() {
+        return true;
+    }
+
     public PlInt refaddr() {
         // Scalar::Util::refaddr()
         int id = System.identityHashCode(this.o);
@@ -4239,7 +4699,8 @@ class PlLvalueRef extends PlReference {
     }
 }
 class PlArrayRef extends PlReference {
-    public static final PlStringConstant REF = new PlStringConstant("ARRAY");
+    public static final String REF_str = new String("ARRAY");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
     public PlArray ar;
 
     public PlArrayRef() {
@@ -4284,20 +4745,26 @@ class PlArrayRef extends PlReference {
             return this.bless.plClassName();
         }
     }
+    public String ref_str() {
+        if ( this.bless == null ) {
+            return REF_str;
+        }
+        else {
+            return this.bless.className();
+        }
+    }
+    public boolean ref_boolean() {
+        return true;
+    }
+
     public PlObject reftype() {
         return REF;
     }
 
     public PlObject aget(int i) {
-        return this.ar.aget(i);
-    }
-    public PlObject aget(PlObject i) {
-        return this.ar.aget(i);
+        return this.ar.a.aget(i);
     }
     public PlObject aget_lvalue(int i) {
-        return this.ar.aget_lvalue(i);
-    }
-    public PlObject aget_lvalue(PlObject i) {
         return this.ar.aget_lvalue(i);
     }
     public PlObject aget_scalarref(int i) {
@@ -4310,9 +4777,6 @@ class PlArrayRef extends PlReference {
         return this.ar.aget_arrayref(i);
     }
     public PlObject aset(int i, PlObject v) {
-        return this.ar.aset(i, v);
-    }
-    public PlObject aset(PlObject i, PlObject v) {
         return this.ar.aset(i, v);
     }
  
@@ -4334,7 +4798,8 @@ class PlArrayRef extends PlReference {
 }
 
 class PlHashRef extends PlReference {
-    public static final PlStringConstant REF = new PlStringConstant("HASH");
+    public static final String REF_str = new String("HASH");
+    public static final PlStringConstant REF = new PlStringConstant(REF_str);
     public PlHash ha;
 
     public PlHashRef() {
@@ -4362,6 +4827,18 @@ class PlHashRef extends PlReference {
             return this.bless.plClassName();
         }
     }
+    public String ref_str() {
+        if ( this.bless == null ) {
+            return REF_str;
+        }
+        else {
+            return this.bless.className();
+        }
+    }
+    public boolean ref_boolean() {
+        return true;
+    }
+
     public PlObject reftype() {
         return REF;
     }
@@ -4381,11 +4858,12 @@ class PlHashRef extends PlReference {
         return v;
     }
 
-    public PlObject hget(PlObject i) {
-        return this.ha.hget(i);
-    }
     public PlObject hget(String i) {
-        return this.ha.hget(i);
+        PlObject o = this.ha.h.get(i);
+        if (o == null) {
+            return PlCx.UNDEF;
+        }
+        return o;
     }
 
     public PlObject hget_lvalue(String i) {
@@ -4399,31 +4877,19 @@ class PlHashRef extends PlReference {
         return this.ha.hget_scalarref(i);
     }
 
-    public PlObject hget_arrayref(PlObject i) {
-        return this.ha.hget_arrayref(i);
-    }
     public PlObject hget_arrayref(String i) {
         return this.ha.hget_arrayref(i);
     }
 
-    public PlObject hget_hashref(PlObject i) {
-        return this.ha.hget_hashref(i);
-    }
     public PlObject hget_hashref(String i) {
         return this.ha.hget_hashref(i);
     }
 
-    public PlObject hset(PlObject i, PlObject v) {
-        return this.ha.hset(i, v);
-    }
     public PlObject hset(String i, PlObject v) {
         return this.ha.hset(i, v);
     }
-    public PlObject hset(PlObject i, PlLvalue v) {
-        return this.ha.hset(i, v);
-    }
     public PlObject hset(String i, PlLvalue v) {
-        return this.ha.hset(i, v);
+        return this.ha.hset(i, v.get());
     }
     public PlObject hset(int want, PlArray i, PlArray v) {
         return this.ha.hset(want, i, v);
@@ -4544,6 +5010,20 @@ class PlClass {
         }
 
         return methodCode;
+    }
+
+    public void invalidate_method_cache(String method, int level) {
+        if (this.methodCache.containsKey(method)) {
+            this.methodCache.remove(method);
+        }
+        // TODO - lookup in all classes that inherit from us
+        // for (PlObject className : PlV.array_get(className + "::ISA")) {
+        //     // prevent infinite loop
+        //     if (level >= 100) {
+        //         PlCORE.die("Recursive inheritance detected in package '" + className + "'");
+        //     }
+        //     PlClass.getInstance(className).invalidate_method_cache(method, level+1);
+        // }
     }
 
     public PlObject method_lookup(String method, int level) {
@@ -4772,7 +5252,7 @@ EOT
 
     , ((map {
             my $perl = $_;
-            $native = $perl;
+            my $native = $perl;
             $native = "++"      if $perl eq "_incr";
             $native = "--"      if $perl eq "_decr";
 "    public static PlObject overload_${perl}(PlObject o) {
@@ -4820,7 +5300,7 @@ EOT
 
     , ((map {
             my $perl = $_;
-            $native = $perl;
+            my $native = $perl;
             $native = "int"     if $perl eq "op_int";
             $native = "~"       if $perl eq "complement";
 "    public static PlObject overload_${perl}(PlObject o) {
@@ -5020,13 +5500,13 @@ class PlLvalueSubstring extends PlLazyLvalue {
     private String end;
     private String replacement;
 
-    public PlLvalueSubstring(PlObject lv, PlObject offset, PlObject length) {
+    public PlLvalueSubstring(PlObject lv, int offset, int length) {
         this.lv = lv;
         this.replacement = lv.get().substr(offset, length).toString();
 
         String s = lv.toString();
-        int ofs = offset.to_int();
-        int len = length.to_int();
+        int ofs = offset;
+        int len = length;
         if (ofs < 0) {
             ofs = s.length() + ofs;
         }
@@ -5062,7 +5542,7 @@ class PlLvalueSubstring extends PlLazyLvalue {
         return (PlLvalue)this.lv;
     }
 
-    public PlObject get() {
+    public PlScalarImmutable get() {
         return new PlString( replacement );
     }
 
@@ -5112,8 +5592,8 @@ class PlLazyTiedLookup extends PlLazyLvalue {
         return llv;
     }
 
-    public PlObject get() {
-        return la.hget(i);
+    public PlScalarImmutable get() {
+        return (PlScalarImmutable)la.hget(i);
     }
 
     public PlObject set(PlObject o) {
@@ -5179,38 +5659,6 @@ class PlLazyScalarref extends PlLazyLvalue {
     }
 }
 
-class PlTieScalar extends PlObject {
-    public PlObject tied;
-    public PlObject old_var;
-
-    public PlTieScalar() {
-    }
-    public boolean is_tiedScalar() {
-        return true;
-    }
-    public PlObject tied() {
-        return tied;
-    }
-
-    public PlObject get() {
-        PlObject v = PerlOp.call("FETCH", new PlArray(tied), PlCx.VOID);
-        old_var = v;
-        return v;
-    }
-
-    public PlObject set(PlObject o) {
-        PerlOp.call("STORE", new PlArray(tied, o), PlCx.VOID);
-        return this;
-    }
-    public PlObject set(PlString o) {
-        PerlOp.call("STORE", new PlArray(tied, o), PlCx.VOID);
-        return this;
-    }
-    public PlObject set(PlInt o) {
-        PerlOp.call("STORE", new PlArray(tied, o), PlCx.VOID);
-        return this;
-    }
-}
 class PlLazyLvalue extends PlLvalue {
     public  PlLvalue llv;   // $$lv
 
@@ -5221,7 +5669,7 @@ class PlLazyLvalue extends PlLvalue {
         return (PlLvalue)PlCORE.die("internal error: called PlLazyLvalue.create_scalar()");
     }
 
-    public PlObject get() {
+    public PlScalarImmutable get() {
         if (llv == null) {
             return PlCx.UNDEF;
         }
@@ -5235,23 +5683,85 @@ class PlLazyLvalue extends PlLvalue {
         }
         return llv.set(o);
     }
-    public PlObject set(PlString o) {
+    public PlObject set(PlScalarImmutable o) {
         if (llv == null) {
             create_scalar();
         }
         return llv.set(o);
     }
-    public PlObject set(PlInt o) {
+    public PlObject set(PlLvalue o) {
         if (llv == null) {
             create_scalar();
         }
         return llv.set(o);
     }
+EOT
+    , ((map {
+            my $perl = $_;
+"    public PlObject ${perl}(PlObject s) {
+        return this.get().${perl}(s);
+    }
+    public PlObject ${perl}2(PlObject s) {
+        return s.${perl}(this.get());
+    }
+"
+            }
+            sort (
+                'num_cmp',
+                'mod',
+                keys %number_binop,
+            )
+      ))
+
+        # unary operators
+        #
+    , ((map {
+            my ($op, $type) = @$_;
+"    public $type $op() {
+        return this.get().$op();
+    }
+"
+            }
+            map( [ $_ => 'PlObject' ], (
+                @number_unary,
+                'blessed',
+                'refaddr',      # Scalar::Util::refaddr()
+                'reftype',      # Scalar::Util::reftype()
+                'to_num',
+            )),
+            map( [ $_ => 'boolean' ], (
+                @boolean_unary,
+                'is_integer_range',
+            )),
+            [ 'toString'      => 'String'   ],
+            [ 'to_int'        => 'int'      ],
+            [ 'to_long'       => 'long'     ],
+            [ 'to_double'     => 'double'   ],
+            [ 'to_boolean'    => 'boolean'  ],
+            [ 'blessed_class' => 'PlClass'  ],
+            [ 'ref'           => 'PlString' ],
+            [ 'ref_str'       => 'String'   ],
+            [ 'ref_boolean'   => 'boolean'  ],
+
+            # add "unbox" accessors to Java classes that were declared with:  'package MyJavaClass { Java }'
+            (map {  my $class = $java_classes{$_};
+                    $class->{import} || $class->{extends} || $class->{implements}
+                      ? [ $class->{perl_to_java}, $class->{java_type} ]
+                      : ()
+                 }
+                 grep { $java_classes{$_}{perl_to_java} }
+                 sort keys %java_classes
+            ),
+      ))
+
+    , <<'EOT'
+
 }
-class PlLvalue extends PlObject {
-    public PlObject o;
+class PlLvalue extends PlScalarObject {
+    public PlScalarImmutable o;
     public Integer pos;
     public boolean regex_zero_length_flag;
+    public PlObject tied;
 
     // Note: several versions of PlLvalue()
     public PlLvalue() {
@@ -5261,6 +5771,9 @@ class PlLvalue extends PlObject {
         this.o = new PlInt(o);
     }
     public PlLvalue(PlObject o) {
+        this.o = (PlScalarImmutable)o;
+    }
+    public PlLvalue(PlScalarImmutable o) {
         this.o = o;
     }
     public PlLvalue(PlLvalue o) {
@@ -5292,32 +5805,41 @@ class PlLvalue extends PlObject {
 
     // tie scalar
     public PlObject tie(PlArray args) {
-        if (this.o.is_tiedScalar()) {
+        if (this.o.is_filehandle()) {
+            return this.o.tie(args);
+        }
+
+        if (this.tied != null) {
             this.untie();
         }
-        PlTieScalar v = new PlTieScalar();
         PlObject self = PerlOp.call("TIESCALAR", args, PlCx.VOID);
-        v.tied = self;
-        v.old_var = this.o;
-        this.set(v);
+        this.tied = self;
         return self;
     }
 
     public PlObject untie() {
-        if (this.o.is_tiedScalar()) {
-            PlObject tied = this.o.tied();
+        if (this.o.is_filehandle()) {
+            return ((PlFileHandle)this.o).untie();
+        }
+
+        if (this.tied != null) {
+            PlObject tied = this.tied;
             PlObject untie = PerlOp.call("can", new PlArray(tied, new PlString("UNTIE")), PlCx.SCALAR);
             if (untie.to_boolean()) {
                 untie.apply(PlCx.VOID, new PlArray(tied));
             };
-            this.set(((PlTieScalar)o).old_var);
+            this.tied = null;
             return tied;
         }
         return this;
     }
     public PlObject tied() {
-        if (this.o.is_tiedScalar()) {
-            return o.tied();
+        if (this.o.is_filehandle()) {
+            return this.o.tied();
+        }
+
+        if (this.tied != null) {
+            return this.tied;
         }
         return PlCx.UNDEF;
     }
@@ -5335,14 +5857,34 @@ class PlLvalue extends PlObject {
         return (PlLvalue)PlCORE.die("Not a SCALAR reference");
     }
 
-    public PlObject get() {
-        if (this.o.is_tiedScalar()) {
-            return this.o.get();
+    public PlObject pos() {
+        // TODO - optimize: we are adding "pos" (Integer) to all PlLvalue objects
+        if (this.pos == null) {
+            return PlCx.UNDEF;
+        }
+        return new PlInt(this.pos);
+    }
+    public PlObject set_pos(PlObject value) {
+        this.regex_zero_length_flag = false;
+        if (value.is_undef()) {
+            this.pos = null;
+        }
+        else {
+            this.pos = value.to_int();
+        }
+        return value;
+    }
+
+    public PlScalarImmutable get() {
+        if (this.tied != null) {
+            PlScalarImmutable v = PerlOp.call("FETCH", new PlArray(tied), PlCx.VOID).scalar();
+            this.o = v;
+            return v;
         }
         return this.o;
     }
     public PlObject get_scalarref() {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             PlLvalueRef ar = new PlLvalueRef(new PlLvalue());
             this.set(ar);
@@ -5355,7 +5897,7 @@ class PlLvalue extends PlObject {
         return o;
     }
     public PlObject get_arrayref() {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             PlArrayRef ar = new PlArrayRef();
             this.set(ar);
@@ -5367,7 +5909,7 @@ class PlLvalue extends PlObject {
         return PlCORE.die("Not an ARRAY reference");
     }
     public PlObject get_hashref() {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             PlHashRef hr = new PlHashRef();
             this.set(hr);
@@ -5378,150 +5920,128 @@ class PlLvalue extends PlObject {
         }
         return PlCORE.die("Not a HASH reference");
     }
-    public PlObject aget(PlObject i) {
-        PlObject o = this.get();
-        if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
-        }
-        return o.aget(i);
-    }
     public PlObject aget(int i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
+            o = new PlArrayRef();
+            this.set(o);
         }
         return o.aget(i);
     }
 
     public PlObject aget_scalarref(int i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
+            o = new PlArrayRef();
+            this.set(o);
         }
         return o.aget_scalarref(i);
     }
     public PlObject aget_arrayref(int i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
+            o = new PlArrayRef();
+            this.set(o);
         }
         return o.aget_arrayref(i);
     }
     public PlObject aget_lvalue(int pos) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
+            o = new PlArrayRef();
+            this.set(o);
         }
         return o.aget_lvalue(pos);
     }
     public PlObject aget_hashref(int i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
+            o = new PlArrayRef();
+            this.set(o);
         }
         return o.aget_hashref(i);
     }
 
     public PlObject aset(int i, PlObject v) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
+            o = new PlArrayRef();
+            this.set(o);
         }
         return o.aset(i, v);
-    }
-    public PlObject aset(PlObject i, PlObject v) {
-        PlObject o = this.get();
-        if (o.is_undef()) {
-            o = this.set(new PlArrayRef());
-        }
-        return o.aset(i, v);
-    }
-    public PlObject hget(PlObject i) {
-        PlObject o = this.get();
-        if (o.is_undef()) {
-            o = this.set(new PlHashRef());
-        }
-        return o.hget(i);
     }
     public PlObject hget(String i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlHashRef());
+            o = new PlHashRef();
+            this.set(o);
         }
         return o.hget(i);
     }
     public PlObject hget_lvalue(String i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlHashRef());
+            o = new PlHashRef();
+            this.set(o);
         }
         return o.hget_lvalue(i);
     }
 
     public PlObject hget_scalarref(String i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlHashRef());
+            o = new PlHashRef();
+            this.set(o);
         }
         return o.hget_scalarref(i);
     }
     public PlObject hget_arrayref(String i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlHashRef());
-        }
-        return o.hget_arrayref(i);
-    }
-    public PlObject hget_arrayref(PlObject i) {
-        PlObject o = this.get();
-        if (o.is_undef()) {
-            o = this.set(new PlHashRef());
+            o = new PlHashRef();
+            this.set(o);
         }
         return o.hget_arrayref(i);
     }
     public PlObject hget_hashref(String i) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlHashRef());
-        }
-        return o.hget_hashref(i);
-    }
-    public PlObject hget_hashref(PlObject i) {
-        PlObject o = this.get();
-        if (o.is_undef()) {
-            o = this.set(new PlHashRef());
+            o = new PlHashRef();
+            this.set(o);
         }
         return o.hget_hashref(i);
     }
 
-    public PlObject hset(PlObject s, PlObject v) {
-        PlObject o = this.get();
+    public PlObject hset(String s, PlObject v) {
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlHashRef());
+            o = new PlHashRef();
+            this.set(o);
         }
         return o.hset(s, v);
     }
-    public PlObject hset(String s, PlObject v) {
-        PlObject o = this.get();
+    public PlObject hset(String s, PlLvalue v) {
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
-            o = this.set(new PlHashRef());
+            o = new PlHashRef();
+            this.set(o);
         }
-        return o.hset(s, v);
+        return o.hset(s, v.get());
     }
 
     public PlObject scalar_deref(String namespace) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             return new PlLazyScalarref(this);
         }
         return o.scalar_deref(namespace);
     }
     public PlObject scalar_deref_strict() {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         return o.scalar_deref_strict();
     }
     public PlObject scalar_deref_lvalue(String namespace) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             PlLvalue lv = new PlLvalue();
             this.set(new PlLvalueRef(lv));
@@ -5530,7 +6050,7 @@ class PlLvalue extends PlObject {
         return o.scalar_deref_lvalue(namespace);
     }
     public PlObject scalar_deref_set(String namespace, PlObject v) {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             PlLvalueRef ar = new PlLvalueRef(new PlLvalue());
             this.set(ar);
@@ -5540,7 +6060,7 @@ class PlLvalue extends PlObject {
 
     public PlArray array_deref(String namespace) {
         // @$x doesn't autovivify
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             return new PlArray();
         }
@@ -5551,11 +6071,11 @@ class PlLvalue extends PlObject {
     }
     public PlArray array_deref_strict() {
         // @$x doesn't autovivify
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         return (PlArray)(o.array_deref_strict());
     }
     public PlArray array_deref_lvalue() {
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             PlArrayRef ar = new PlArrayRef();
             this.set(ar);
@@ -5568,7 +6088,7 @@ class PlLvalue extends PlObject {
     }
     public PlObject array_deref_set(PlObject v) {
         // @$x = ...
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             o = new PlArrayRef();
             this.set(o);
@@ -5582,7 +6102,7 @@ class PlLvalue extends PlObject {
 
     public PlObject hash_deref(String namespace) {
         // %$x doesn't autovivify
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             return new PlHash();
         }
@@ -5591,14 +6111,14 @@ class PlLvalue extends PlObject {
         }
         return o.hash_deref(namespace);
     }
-    public PlObject hash_deref_strict() {
+    public PlHash hash_deref_strict() {
         // %$x doesn't autovivify
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         return o.hash_deref_strict();
     }
     public PlObject hash_deref_set(PlObject v) {
         // %$x = ...
-        PlObject o = this.get();
+        PlScalarImmutable o = this.get();
         if (o.is_undef()) {
             o = new PlHashRef();
             this.set(o);
@@ -5618,32 +6138,28 @@ class PlLvalue extends PlObject {
         if (o.is_lvalue()) {
             o = o.get();
         }
-        if (this.o.is_tiedScalar()) {
-            ((PlTieScalar)this.o).set(o);
+        if (this.tied != null) {
+            PerlOp.call("STORE", new PlArray(tied, o), PlCx.VOID);
+            return this;
+        }
+        this.o = (PlScalarImmutable)o;
+        return this;
+    }
+    public PlObject set(PlScalarImmutable o) {
+        if (this.tied != null) {
+            PerlOp.call("STORE", new PlArray(tied, o), PlCx.VOID);
             return this;
         }
         this.o = o;
         return this;
     }
-    public PlObject set(PlString o) {
-        if (this.o.is_tiedScalar()) {
-            ((PlTieScalar)this.o).set(o);
-            return this;
-        }
-        this.o = o;
-        return this;
-    }
-    public PlObject set(PlInt o) {
-        if (this.o.is_tiedScalar()) {
-            ((PlTieScalar)this.o).set(o);
-            return this;
-        }
-        this.o = o;
-        return this;
-    }
-
     public PlObject set(PlLvalue o) {
-        return this.set(o.get());
+        if (this.tied != null) {
+            PerlOp.call("STORE", new PlArray(tied, o), PlCx.VOID);
+            return this;
+        }
+        this.o = o.get();
+        return this;
     }
     public PlObject set(PlArray o) {
         // $a = @x
@@ -5657,21 +6173,28 @@ class PlLvalue extends PlObject {
         // $a = new Object()
         return this.set(PlJavaObject.fromObject(o));
     }
-EOT
-    , ((map {
-            my $native = $_;
-            my $perl   = $native_to_perl{$native};
-            $native && $perl ? 
-"    public PlObject set($native s) {
-        this.set(new $perl(s));
+    public PlObject set(String s) {
+        if (s == null) {
+            this.set(PlCx.UNDEF);
+            return this;
+        }
+        this.set(new PlString(s));
         return this;
     }
-" : ()
-            }
-            sort keys %native_to_perl ))
+    public PlObject set(boolean s) {
+        this.set(new PlBool(s));
+        return this;
+    }
+    public PlObject set(double s) {
+        this.set(new PlDouble(s));
+        return this;
+    }
+    public PlObject set(long s) {
+        this.set(new PlInt(s));
+        return this;
+    }
 
-    , <<'EOT'
-    public PlObject length() {
+    public PlScalarImmutable length() {
         return this.get().length();
     }
     public PlObject apply(int want, PlArray List__) {
@@ -5775,40 +6298,48 @@ EOT
     public boolean is_lvalue() {
         return true;
     }
-
+    public Object toJava() {
+        PlScalarImmutable res = this.get();
+        if ( res.is_JavaObject() ) {
+            return res.toJava();
+        }
+        return res;
+    }
+ 
     public PlObject pre_decr() {
         // --$x
-        PlObject res = this.get();
-        return this.set(res._decr());
+        PlScalarImmutable res = this.get();
+        return this.set((PlScalarImmutable)res._decr());
     }
     public PlObject post_decr() {
         // $x--
-        PlObject res = this.get();
-        this.set(res._decr());
+        PlScalarImmutable res = this.get();
+        this.set((PlScalarImmutable)res._decr());
         return res;
     }
     public PlObject pre_incr() {
         // ++$x
-        PlObject res = this.get();
-        return this.set(res._incr());
+        PlScalarImmutable res = this.get();
+        return this.set((PlScalarImmutable)res._incr());
     }
     public PlObject post_incr() {
         // $x++
-        PlObject res = this.get();
-        if (res.is_undef()) {
-            res = PlCx.INT0;
-        }
-        this.set(res._incr());
+        PlScalarImmutable res = this.get();
+        this.set((PlScalarImmutable)res._incr());
         return res;
     }
     public PlObject bless(String className) {
         return this.get().bless(className);
     }
 
+    public PlObject set_prototype(PlObject v) {
+        return this.get().set_prototype(v);
+    }
+
     public PlObject pow(PlObject arg)    { return this.get().pow(arg); }
     public PlObject atan2(PlObject arg)  { return this.get().atan2(arg); }
 
-    public PlObject scalar() {
+    public PlScalarImmutable scalar() {
         return this.get();
     }
     public PlObject clone() throws CloneNotSupportedException {
@@ -5825,10 +6356,18 @@ EOT
     , ((map {
             my $perl = $_;
 "    public PlObject ${perl}(PlObject s) {
-        return this.get().${perl}(s);
+        if (this.tied != null) {
+            PlScalarImmutable v = PerlOp.call(\"FETCH\", new PlArray(tied), PlCx.VOID).scalar();
+            this.o = v;
+        }
+        return this.o.${perl}(s);
     }
     public PlObject ${perl}2(PlObject s) {
-        return s.${perl}(this.get());
+        if (this.tied != null) {
+            PlScalarImmutable v = PerlOp.call(\"FETCH\", new PlArray(tied), PlCx.VOID).scalar();
+            this.o = v;
+        }
+        return s.${perl}(this.o);
     }
 "
             }
@@ -5869,7 +6408,11 @@ EOT
     , ((map {
             my ($op, $type) = @$_;
 "    public $type $op() {
-        return this.get().$op();
+        if (this.tied != null) {
+            PlScalarImmutable v = PerlOp.call(\"FETCH\", new PlArray(tied), PlCx.VOID).scalar();
+            this.o = v;
+        }
+        return this.o.$op();
     }
 "
             }
@@ -5885,11 +6428,14 @@ EOT
                 'is_integer_range',
             )),
             [ 'toString'      => 'String'   ],
+            [ 'to_int'        => 'int'      ],
             [ 'to_long'       => 'long'     ],
             [ 'to_double'     => 'double'   ],
             [ 'to_boolean'    => 'boolean'  ],
             [ 'blessed_class' => 'PlClass'  ],
             [ 'ref'           => 'PlString' ],
+            [ 'ref_str'       => 'String'   ],
+            [ 'ref_boolean'   => 'boolean'  ],
 
             # add "unbox" accessors to Java classes that were declared with:  'package MyJavaClass { Java }'
             (map {  my $class = $java_classes{$_};
@@ -5897,11 +6443,13 @@ EOT
                       ? [ $class->{perl_to_java}, $class->{java_type} ]
                       : ()
                  }
+                 grep { $java_classes{$_}{perl_to_java} }
                  sort keys %java_classes
             ),
       ))
 
     , <<'EOT'
+
 }
 
 EOT
@@ -5915,6 +6463,9 @@ class PlROvalue extends PlLvalue {
         this.o = PlCx.UNDEF;
     }
     public PlROvalue(PlObject o) {
+        this.o = (PlScalarImmutable)o;
+    }
+    public PlROvalue(PlScalarImmutable o) {
         this.o = o;
     }
     public PlROvalue(PlLvalue o) {
@@ -5933,10 +6484,10 @@ class PlROvalue extends PlLvalue {
         PlCORE.die("Modification of a read-only value attempted");
         return this;
     }
-    public PlObject set(PlString o) {
+    public PlObject set(PlScalarImmutable o) {
         return PlCORE.die("Modification of a read-only value attempted");
     }
-    public PlObject set(PlInt o) {
+    public PlObject set(PlLvalue o) {
         return PlCORE.die("Modification of a read-only value attempted");
     }
 
@@ -6006,8 +6557,8 @@ class PlTieArrayList extends PlArrayList {
             PerlOp.call("PUSH", new PlArray(tied, v), PlCx.SCALAR);
         }
     }
-    public PlObject get(int i) {
-        return PerlOp.call("FETCH", new PlArray(tied, new PlInt(i)), PlCx.SCALAR);
+    public PlScalarImmutable get(int i) {
+        return PerlOp.call("FETCH", new PlArray(tied, new PlInt(i)), PlCx.SCALAR).scalar();
     }
     public PlObject remove(int i) {
         if (i == 0) {
@@ -6056,8 +6607,8 @@ class PlTieArrayList extends PlArrayList {
         return PerlOp.call("POP", new PlArray(tied), PlCx.SCALAR);
     }
 
-    public PlObject scalar() {
-        return PerlOp.call("SCALAR", new PlArray(this.tied), PlCx.SCALAR);
+    public PlScalarImmutable scalar() {
+        return PerlOp.call("SCALAR", new PlArray(this.tied), PlCx.SCALAR).scalar();
     }
     public boolean is_tiedArray() {
         return true;
@@ -6112,7 +6663,7 @@ class PlArrayList extends ArrayList<PlObject> implements Iterable<PlObject> {
             this.add(PlCx.UNDEF);
         }
         if (size < this.size() && this.size() > 0) {
-            this.removeRange(size, this.size() - 1);
+            this.removeRange(size, this.size());
         }
         return new PlInt(this.size());
     }
@@ -6168,7 +6719,7 @@ class PlArrayList extends ArrayList<PlObject> implements Iterable<PlObject> {
         }
     }
 
-    public PlObject scalar() {
+    public PlScalarImmutable scalar() {
         return new PlInt(this.hashCode());
     }
     public boolean is_tiedArray() {
@@ -6248,6 +6799,16 @@ class PlArray extends PlObject implements Iterable<PlObject> {
         this.a = aa;
     }
 
+    // TODO - this is part of a possible optimization to: split("", $str)
+    // public PlArray(char... args) {
+    //     PlArrayList aa = new PlArrayList();
+    //     for (char s : args) {
+    //         aa.add(new PlString(s));
+    //     }
+    //     this.each_iterator = 0;
+    //     this.a = aa;
+    // }
+
     // tie hash
     public PlObject tie(PlArray args) {
         if (this.a.is_tiedArray()) {
@@ -6305,6 +6866,45 @@ class PlArray extends PlObject implements Iterable<PlObject> {
         return (PlLvalue)PlCORE.die("Not a SCALAR reference");
     }
 
+    public static PlArray construct_list_of_aliases(PlScalarImmutable s) {
+        PlArrayList aa = new PlArrayList();
+        aa.add(new PlROvalue(s));  // store lvalue as read-only
+        return new PlArray(aa);
+    }
+    public static PlArray construct_list_of_aliases(PlScalarImmutable s1, PlScalarImmutable s2) {
+        PlArrayList aa = new PlArrayList();
+        aa.add(new PlROvalue(s1));  // store lvalue as read-only
+        aa.add(new PlROvalue(s2));  // store lvalue as read-only
+        return new PlArray(aa);
+    }
+    public static PlArray construct_list_of_aliases(PlScalarImmutable... args) {
+        PlArrayList aa = new PlArrayList();
+        for (PlObject s : args) {
+            aa.add(new PlROvalue(s));  // store "read only"
+        }
+        return new PlArray(aa);
+    }
+
+    public static PlArray construct_list_of_aliases(PlLvalue s) {
+        PlArrayList aa = new PlArrayList();
+        aa.add(s);  // store lvalue as-is
+        return new PlArray(aa);
+    }
+    public static PlArray construct_list_of_aliases(PlLvalue s1, PlLvalue s2) {
+        PlArrayList aa = new PlArrayList();
+        aa.add(s1);  // store lvalue as-is
+        aa.add(s2);  // store lvalue as-is
+        return new PlArray(aa);
+    }
+
+    public static PlArray construct_list_of_aliases(PlArray s) {
+        PlArrayList aa = new PlArrayList();
+        int ll = s.to_int();
+        for (int i = 0; i < ll; i++) {
+            aa.add(s.aget_lvalue(i));
+        }
+        return new PlArray(aa);
+    }
     public static PlArray construct_list_of_aliases(PlObject s) {
         PlArrayList aa = new PlArrayList();
         if (s.is_lvalue()) {
@@ -6319,7 +6919,8 @@ class PlArray extends PlObject implements Iterable<PlObject> {
         }
         else if (s.is_array()) {
             // ( @x, @y );
-            for (int i = 0; i < s.to_long(); i++) {
+            int ll = s.to_int();
+            for (int i = 0; i < ll; i++) {
                 aa.add(s.aget_lvalue(i));
             }
         }
@@ -6343,7 +6944,8 @@ class PlArray extends PlObject implements Iterable<PlObject> {
             }
             else if (s.is_array()) {
                 // ( @x, @y );
-                for (int i = 0; i < s.to_long(); i++) {
+                int ll = s.to_int();
+                for (int i = 0; i < ll; i++) {
                     aa.add(s.aget_lvalue(i));
                 }
             }
@@ -6353,17 +6955,51 @@ class PlArray extends PlObject implements Iterable<PlObject> {
         }
         return new PlArray(aa);
     }
+    public static PlArray construct_list_of_aliases(Object... args) {
+        PlArrayList aa = new PlArrayList();
+        for (Object s1 : args) {
+            PlObject s = PlJavaObject.fromObject(s1);
+            if (s.is_lvalue()) {
+                aa.add(s);  // store lvalue as-is
+            }
+            else if (s.is_hash()) {
+                // ( %x );
+                s = ((PlHash)s).to_list_of_aliases();
+                for (int i = 0; i < s.to_long(); i++) {
+                    aa.add(s.aget_lvalue(i));
+                }
+            }
+            else if (s.is_array()) {
+                // ( @x, @y );
+                int ll = s.to_int();
+                for (int i = 0; i < ll; i++) {
+                    aa.add(s.aget_lvalue(i));
+                }
+            }
+            else {
+                aa.add(new PlROvalue(s));  // store "read only"
+            }
+        }
+        return new PlArray(aa);
+    }
+
     public static PlArray construct_list_of_references(PlObject... args) {
         PlArray aa = PlArray.construct_list_of_aliases(args);
         PlArray result = new PlArray();
         for (PlObject s : aa) {
-            result.push(new PlLvalueRef(s));
+            result.push_void(new PlLvalueRef(s));
         }
         return result;
     }
-    public static PlObject static_list_set(int want, PlObject src, PlObject... args) {
-        src = new PlArray(src);
-        int size = src.to_int();
+
+    public static void static_list_set(PlObject src, PlLvalue... args) {
+        int count = 0;
+        for (PlLvalue s : args) {
+            s.set(src.aget(count++));
+        }
+    }
+    public static void static_list_set(PlObject src_list, PlObject... args) {
+        PlArray src = new PlArray(src_list);
         for (PlObject s : args) {
             if (s.is_hash()) {
                 // ( %x );
@@ -6393,10 +7029,59 @@ class PlArray extends PlObject implements Iterable<PlObject> {
                 PlCORE.die("Can't modify constant item in list assignment");
             }
         }
+    }
+
+    public static PlObject static_list_set(int want, PlObject src, PlLvalue... args) {
+        int count = 0;
+        for (PlLvalue s : args) {
+            s.set(src.aget(count++));
+        }
+        if (want == PlCx.VOID) {
+            return PlCx.UNDEF;
+        }
         if (want == PlCx.LIST) {
             return PlArray.construct_list_of_aliases(args);
         }
-        return new PlInt(size);
+        return src.scalar();
+    }
+    public static PlObject static_list_set(int want, PlObject src_list, PlObject... args) {
+        PlArray src = new PlArray(src_list);
+        for (PlObject s : args) {
+            if (s.is_hash()) {
+                // ( %x );
+                ((PlHash)s).set(PlCx.VOID, src);
+                src = new PlArray();
+            }
+            else if (s.is_slice()) {
+                // ( @x[3,4] ); - "slice" is not "slurpy"
+                int s_size = s.to_int();
+                for (int i = 0; i < s_size; i++) {
+                    s.aset(i, src.shift());
+                }
+            }
+            else if (s.is_array()) {
+                // ( @x ); - "array" is "slurpy"
+                s.set(src);
+                src = new PlArray();
+            }
+            else if (s.is_lvalue()) {
+                PlObject o = src.shift();
+                s.set(o);
+            }
+            else if (s.is_undef()) {
+                src.shift();   // skip
+            }
+            else {
+                PlCORE.die("Can't modify constant item in list assignment");
+            }
+        }
+        if (want == PlCx.VOID) {
+            return PlCx.UNDEF;
+        }
+        if (want == PlCx.LIST) {
+            return PlArray.construct_list_of_aliases(args);
+        }
+        return src_list.scalar();
     }
     public PlObject list_set(int want, PlArray s) {
         // @x[3,4] = ( @x, @y );
@@ -6482,9 +7167,6 @@ EOT
             sort keys %native_to_perl ))
 
     , <<'EOT'
-    public PlObject aget(PlObject i) {
-        return this.a.aget(i.to_int());
-    }
     public PlObject aget(int i) {
         return this.a.aget(i);
     }
@@ -6507,12 +7189,6 @@ EOT
         this.a.set(pos, a);
         return a;
     }
-    public PlObject aget_lvalue(PlObject i) {
-        return this.aget_lvalue(i.to_int());
-    }
-    public PlObject aget_lvalue_local(PlObject i) {
-        return this.aget_lvalue_local(i.to_int());
-    }
     public PlObject aget_lvalue_local(int i) {
         PlObject o = this.a.get(i);
         if (o == null) {
@@ -6525,7 +7201,7 @@ EOT
         // @a[LIST]
         PlArrayList aa = new PlArrayList();
         for (PlObject i : a) {
-            aa.add( this.aget_lvalue(i) );
+            aa.add( this.aget_lvalue(i.to_int()) );
         }
         PlSlice result = new PlSlice(aa);
         if (want == PlCx.LIST) {
@@ -6538,7 +7214,7 @@ EOT
         PlArrayList aa = new PlArrayList();
         for (PlObject i : a) {
             aa.add( i );
-            aa.add( this.aget_lvalue(i) );
+            aa.add( this.aget_lvalue(i.to_int()) );
         }
         PlSlice result = new PlSlice(aa);
         if (want == PlCx.LIST) {
@@ -6547,12 +7223,13 @@ EOT
         return result.pop();
     }
 
-    public PlObject get_scalar(PlObject i) {
+    public PlObject get_scalar(PlObject s) {
         // $$x
-        PlObject o = this.aget(i);
+        int i = s.to_int();
+        PlObject o = this.a.aget(i);
         if (o.is_undef()) {
             PlLvalue a = new PlLvalue();
-            this.aset(i, new PlLvalueRef(a));
+            this.a.aset(i, new PlLvalueRef(a));
             return a;
         }
         else if (o.is_scalarref()) {
@@ -6563,47 +7240,38 @@ EOT
         return o;
     }
     public PlObject aget_scalarref(int i) {
-        PlObject o = this.aget(i);
+        PlObject o = this.a.aget(i);
         if (o.is_undef()) {
             return new PlLvalueRef(new PlLazyScalarref(new PlLazyIndex(this, i)));
         }
-        else if (o.is_scalarref()) {
-            return o;
-        }
-        return PlCORE.die("Not a SCALAR reference");
+        return o;
     }
 
     public PlObject aget_arrayref(int i) {
-        PlObject o = this.aget(i);
+        PlObject o = this.a.aget(i);
         if (o.is_undef()) {
             PlArrayRef ar = new PlArrayRef();
-            this.aset(i, ar);
+            this.a.aset(i, ar);
             return ar;
         }
-        else if (o.is_arrayref()) {
-            return o;
-        }
-        return PlCORE.die("Not an ARRAY reference");
+        return o;
     }
 
     public PlObject aget_hashref(int i) {
-        PlObject o = this.aget(i);
+        PlObject o = this.a.aget(i);
         if (o.is_undef()) {
             PlHashRef hr = new PlHashRef();
-            this.aset(i, hr);
+            this.a.aset(i, hr);
             return hr;
         }
-        else if (o.is_hashref()) {
-            return o;
-        }
-        return PlCORE.die("Not a HASH reference");
+        return o;
     }
 
     public PlObject get_hash(int i) {
-        PlObject o = this.aget(i);
+        PlObject o = this.a.aget(i);
         if (o.is_undef()) {
             PlHashRef hr = new PlHashRef();
-            this.aset(i, hr);
+            this.a.aset(i, hr);
             return hr;
         }
         else if (o.is_hashref()) {
@@ -6613,14 +7281,8 @@ EOT
     }
 
     // Note: multiple versions of set()
-    public PlObject aset(PlObject i, PlObject v) {
-        return this.a.aset(i.to_int(), v);
-    }
     public PlObject aset(int i, PlObject v) {
         return this.a.aset(i, v);
-    }
-    public PlObject aset(PlObject i, PlLvalue v) {
-        return this.a.aset(i.to_int(), v.get());
     }
     public PlObject aset(int i, PlLvalue v) {
         return this.a.aset(i, v.get());
@@ -6628,24 +7290,30 @@ EOT
 
     public PlObject push(PlObject... args) {
         for (int i = 0; i < args.length; i++) {
-            this.push(args[i]);
+            this.push_void(args[i]);
         }
-        return this.length_of_array();
+        return new PlInt(this.a.size());
     }
+    public void push_void(PlObject... args) {
+        for (int i = 0; i < args.length; i++) {
+            this.push_void(args[i]);
+        }
+    }
+
     public PlObject unshift(PlObject... args) {
         for (int i = args.length-1; i >= 0; i--) {
             this.unshift(args[i]);
         }
-        return this.length_of_array();
-    }
-    public PlObject aset(PlObject s, Object o) {
-        return this.aset(s, PlJavaObject.fromObject(o));
+        return new PlInt(this.a.size());
     }
     public PlObject aset(int s, Object o) {
         return this.aset(s, PlJavaObject.fromObject(o));
     }
     public PlObject push(Object o) {
         return this.push(PlJavaObject.fromObject(o));
+    }
+    public void push_void(Object o) {
+        this.push_void(PlJavaObject.fromObject(o));
     }
     public PlObject unshift(Object o) {
         return this.unshift(PlJavaObject.fromObject(o));
@@ -6656,14 +7324,14 @@ EOT
             my $native = $_;
             my $perl   = $native_to_perl{$native};
             $native && $perl ?
-"    public PlObject aset(PlObject i, $native s) {
-        return this.aset(i, new $perl(s));
-    }
-    public PlObject aset(int i, $native s) {
+"    public PlObject aset(int i, $native s) {
         return this.aset(i, new $perl(s));
     }
     public PlObject push($native s) {
         return this.push(new $perl(s));
+    }
+    public void push_void($native s) {
+        this.push_void(new $perl(s));
     }
     public PlObject unshift($native s) {
         return this.unshift(new $perl(s));
@@ -6682,12 +7350,36 @@ EOT
         if (v.is_array()) {
             return this.push( (PlArray)v );
         }
+        else if (v.is_hash()) {
+            return this.push( (PlHash)v );
+        }
         this.a.add(v.scalar());
-        return this.length_of_array();
+        return new PlInt(this.a.size());
     }
+    public void push_void(PlObject v) {
+        if (v.is_array()) {
+            this.push_void( (PlArray)v );
+            return;
+        }
+        else if (v.is_hash()) {
+            this.push_void( (PlHash)v );
+            return;
+        }
+        this.a.add(v.scalar());
+    }
+
     public PlObject push(PlLvalue v) {
         this.a.add(v.get());
-        return this.length_of_array();
+        return new PlInt(this.a.size());
+    }
+    public void push_void(PlLvalue v) {
+        this.a.add(v.get());
+    }
+    public PlObject push(PlHash args) {
+        return push(args.to_array());
+    }
+    public void push_void(PlHash args) {
+        push_void(args.to_array());
     }
     public PlObject push(PlArray args) {
         int size = args.a.size();
@@ -6698,13 +7390,29 @@ EOT
                 s = s.to_array();
             }
             if (s.is_array()) {
-                this.push(s);
+                this.push_void(s);
             }
             else {
                 this.a.add(s);
             }
         }
-        return this.length_of_array();
+        return new PlInt(this.a.size());
+    }
+    public void push_void(PlArray args) {
+        int size = args.a.size();
+        for (int i = 0; i < size; i++) {
+            PlObject s = args.aget(i);
+            if (s.is_hash()) {
+                // @x = %x;
+                s = s.to_array();
+            }
+            if (s.is_array()) {
+                this.push_void(s);
+            }
+            else {
+                this.a.add(s);
+            }
+        }
     }
 
     // Note: multiple versions of unshift()
@@ -6712,12 +7420,18 @@ EOT
         if (v.is_array()) {
             return this.unshift( (PlArray)v );
         }
+        else if (v.is_hash()) {
+            return this.unshift( (PlHash)v );
+        }
         this.a.add(0, v.scalar());
-        return this.length_of_array();
+        return new PlInt(this.a.size());
     }
     public PlObject unshift(PlLvalue v) {
         this.a.add(0, v.get());
-        return this.length_of_array();
+        return new PlInt(this.a.size());
+    }
+    public PlObject unshift(PlHash args) {
+        return unshift(args.to_array());
     }
     public PlObject unshift(PlArray args) {
         args = new PlArray(args);   // allow "unshift @x, @x" - TODO: optimize
@@ -6735,7 +7449,7 @@ EOT
                 this.a.add(0, s);
             }
         }
-        return this.length_of_array();
+        return new PlInt(this.a.size());
     }
 
     public PlObject pop() {
@@ -6758,7 +7472,7 @@ EOT
         PlArray aa = new PlArray();
         int size = this.to_int();
         for (int i = 0; i < size; i++) {
-            aa.push(new PlInt(i));
+            aa.push_void(new PlInt(i));
         }
         return aa;
     }
@@ -6766,8 +7480,8 @@ EOT
         PlArray aa = new PlArray();
         int size = this.to_int();
         if (this.each_iterator < size) {
-            aa.push(new PlInt(this.each_iterator));
-            aa.push(this.aget(this.each_iterator));
+            aa.push_void(new PlInt(this.each_iterator));
+            aa.push_void(this.a.aget(this.each_iterator));
             this.each_iterator++;
         }
         else {
@@ -6780,7 +7494,7 @@ EOT
         StringBuilder sb = new StringBuilder();
         int size = this.to_int();
         for (int i = 0; i < size; i++) {
-            String item = this.aget(i).toString();
+            String item = this.a.aget(i).toString();
             sb.append(item);
         }
         return sb.toString();
@@ -6791,8 +7505,11 @@ EOT
     public int to_int() {
         return this.a.size();
     }
-    public PlObject length_of_array() {
+    public PlScalarImmutable length_of_array() {
         return new PlInt(this.a.size());
+    }
+    public boolean length_of_array_boolean() {
+        return ( this.a.size() > 0 );
     }
     public int length_of_array_int() {
         return this.a.size();
@@ -6810,13 +7527,13 @@ EOT
         return (this.a.size() > 0);
     }
     public PlObject to_num() {
-        return this.scalar();
+        return new PlInt(this.a.size());
     }
     public boolean is_array() {
         return true;
     }
-    public PlObject scalar() {
-        return this.length_of_array();
+    public PlScalarImmutable scalar() {
+        return new PlInt(this.a.size());
     }
 }
 
@@ -6857,8 +7574,8 @@ class PlTieHashMap extends PlHashMap {
     // clear()
     // entrySet().iterator() == iterator()
 
-    public PlObject get(Object i) {
-        return PerlOp.call("FETCH", new PlArray(this.tied, new PlString((String)i)), PlCx.SCALAR);
+    public PlScalarImmutable get(Object i) {
+        return PerlOp.call("FETCH", new PlArray(this.tied, new PlString((String)i)), PlCx.SCALAR).scalar();
     }
     public PlObject put(String i, PlObject v) {
         return PerlOp.call("STORE", new PlArray(this.tied, new PlString(i), v), PlCx.SCALAR);
@@ -6875,8 +7592,8 @@ class PlTieHashMap extends PlHashMap {
     public Iterator<Map.Entry<String, PlObject>> iterator() {
         return new PlTieHashIterator(this.tied);
     }
-    public PlObject scalar() {
-        return PerlOp.call("SCALAR", new PlArray(this.tied), PlCx.SCALAR);
+    public PlScalarImmutable scalar() {
+        return PerlOp.call("SCALAR", new PlArray(this.tied), PlCx.SCALAR).scalar();
     }
     public boolean is_tiedHash() {
         return true;
@@ -6909,7 +7626,7 @@ class PlHashMap extends HashMap<String, PlObject> implements Iterable<Map.Entry<
     public Iterator<Map.Entry<String, PlObject>> iterator() {
         return this.entrySet().iterator();
     }
-    public PlObject scalar() {
+    public PlScalarImmutable scalar() {
         return new PlInt(this.hashCode());
     }
     public boolean is_tiedHash() {
@@ -6986,7 +7703,7 @@ class PlHash extends PlObject implements Iterable<PlObject> {
                 // %x = ( @x, @y );
                 int array_size = s.to_int();
                 for (int j = 0; j < array_size; j++) {
-                    PlObject key = s.aget(j);
+                    String key = s.aget(j).toString();
                     j++;
                     PlObject value;
                     if ( j >= array_size ) {
@@ -7009,7 +7726,7 @@ class PlHash extends PlObject implements Iterable<PlObject> {
                 else {
                     value = args[i];
                 }
-                this.hset(s, value);
+                this.hset(s.toString(), value);
             }
         }
         this.each_iterator.reset();
@@ -7075,7 +7792,7 @@ class PlHash extends PlObject implements Iterable<PlObject> {
             // %x = ( @x, @y );
             int array_size = s.to_int();
             for (int j = 0; j < array_size; j++) {
-                PlObject key = s.aget(j);
+                String key = s.aget(j).toString();
                 j++;
                 PlObject value;
                 if ( j >= array_size ) {
@@ -7097,7 +7814,7 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         else {
             // TODO - emit warning about odd number of arguments
             PlCORE.warn(PlCx.VOID, new PlArray(new PlString("Odd number of elements in hash assignment")));
-            this.hset(s, PlCx.UNDEF);
+            this.hset(s.toString(), PlCx.UNDEF);
         }
         this.each_iterator.reset();
         if (want == PlCx.LIST) {
@@ -7111,8 +7828,8 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         for (Map.Entry<String, PlObject> entry : this.h) {
             String key = entry.getKey();
             PlObject value = entry.getValue();
-            aa.push(new PlString(key));
-            aa.push(value);
+            aa.push_void(new PlString(key));
+            aa.push_void(value);
         }
         return aa;
     }
@@ -7129,13 +7846,6 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         return result;
     }
 
-    public PlObject hget(PlObject i) {
-        PlObject o = this.h.get(i.toString());
-        if (o == null) {
-            return PlCx.UNDEF;
-        }
-        return o;
-    }
     public PlObject hget(String i) {
         PlObject o = this.h.get(i);
         if (o == null) {
@@ -7204,12 +7914,13 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         return PerlOp.push_local(this, i);
     }
 
-    public PlObject get_scalar(PlObject i) {
+    public PlObject get_scalar(PlObject arg) {
         // $$x
-        PlObject o = this.hget(i);
-        if (o.is_undef()) {
+        String s = arg.toString();
+        PlObject o = this.h.get(s);
+        if (o == null || o.is_undef()) {
             PlLvalue a = new PlLvalue();
-            this.hset(i, new PlLvalueRef(a));
+            this.hset(s, new PlLvalueRef(a));
             return a;
         }
         else if (o.is_scalarref()) {
@@ -7221,8 +7932,8 @@ class PlHash extends PlObject implements Iterable<PlObject> {
     }
 
     public PlObject hget_scalarref(String i) {
-        PlObject o = this.hget(i);
-        if (o.is_undef()) {
+        PlObject o = this.h.get(i);
+        if (o == null || o.is_undef()) {
             return new PlLvalueRef(new PlLazyScalarref(new PlLazyLookup(this, i)));
         }
         else if (o.is_scalarref()) {
@@ -7232,21 +7943,9 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         return o;
     }
 
-    public PlObject hget_arrayref(PlObject i) {
-        PlObject o = this.hget(i);
-        if (o.is_undef()) {
-            PlArrayRef ar = new PlArrayRef();
-            this.hset(i, ar);
-            return ar;
-        }
-        else if (o.is_arrayref()) {
-            return o;
-        }
-        return PlCORE.die("Not an ARRAY reference");
-    }
     public PlObject hget_arrayref(String i) {
-        PlObject o = this.hget(i);
-        if (o.is_undef()) {
+        PlObject o = this.h.get(i);
+        if (o == null || o.is_undef()) {
             PlArrayRef ar = new PlArrayRef();
             this.hset(i, ar);
             return ar;
@@ -7257,21 +7956,9 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         return PlCORE.die("Not an ARRAY reference");
     }
 
-    public PlObject hget_hashref(PlObject i) {
-        PlObject o = this.hget(i);
-        if (o.is_undef()) {
-            PlHashRef hr = new PlHashRef();
-            this.hset(i, hr);
-            return hr;
-        }
-        else if (o.is_hashref()) {
-            return o;
-        }
-        return PlCORE.die("Not a HASH reference");
-    }
     public PlObject hget_hashref(String i) {
-        PlObject o = this.hget(i);
-        if (o.is_undef()) {
+        PlObject o = this.h.get(i);
+        if (o == null || o.is_undef()) {
             PlHashRef hr = new PlHashRef();
             this.hset(i, hr);
             return hr;
@@ -7283,18 +7970,6 @@ class PlHash extends PlObject implements Iterable<PlObject> {
     }
 
     // Note: multiple versions of set()
-    public PlObject hset(PlObject s, PlObject v) {
-        String key = s.toString();
-        PlObject value = v.scalar();
-        PlObject o = this.h.get(key);
-        if (o != null && o.is_lvalue()) {
-            o.set(value);
-        }
-        else {
-            this.h.put(key, value);
-        }
-        return v;
-    }
     public PlObject hset(String key, PlObject v) {
         PlObject value = v.scalar();
         PlObject o = this.h.get(key);
@@ -7306,17 +7981,22 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         }
         return v;
     }
-    public PlObject hset(PlObject s, PlLvalue v) {
-        return this.hset(s, v.get());
-    }
-    public PlObject hset(String s, PlLvalue v) {
-        return this.hset(s, v.get());
+    public PlObject hset(String key, PlLvalue v) {
+        PlObject value = v.get();
+        PlObject o = this.h.get(key);
+        if (o != null && o.is_lvalue()) {
+            o.set(value);
+        }
+        else {
+            this.h.put(key, value);
+        }
+        return v;
     }
     public PlObject hset(int want, PlArray s, PlArray v) {
         PlArray aa = new PlArray();
 
         for (int i = 0; i < v.to_int(); i++){
-            aa.push(this.hset(v.aget(i), s.aget(i)));
+            aa.push_void(this.hset(v.aget(i).toString(), s.aget(i)));
         };
         if (want == PlCx.LIST) {
             return aa;
@@ -7344,7 +8024,7 @@ class PlHash extends PlObject implements Iterable<PlObject> {
 
         for (int i = 0; i < a.to_int(); i++) {
             PlObject r = this.hdelete(want, a.aget(i));
-            aa.push(r);
+            aa.push_void(r);
         }
         if (want == PlCx.LIST) {
             return aa;
@@ -7353,19 +8033,19 @@ class PlHash extends PlObject implements Iterable<PlObject> {
     }
     public PlObject hdelete(int want, PlString a) {
         PlArray aa = new PlArray();
-        aa.push(a);
+        aa.push_void(a);
         return this.hdelete(want, aa);
     }
     public PlObject hdelete(int want, PlLvalue a) {
         PlArray aa = new PlArray();
-        aa.push(a);
+        aa.push_void(a);
         return this.hdelete(want, aa);
     }
     public PlObject values() {
         PlArray aa = new PlArray();
         for (Map.Entry<String, PlObject> entry : this.h) {
             PlObject value = entry.getValue();
-            aa.push(value);
+            aa.push_void(value);
         }
         return aa;
     }
@@ -7373,7 +8053,7 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         PlArray aa = new PlArray();
         for (Map.Entry<String, PlObject> entry : this.h) {
             String key = entry.getKey();
-            aa.push(new PlString(key));
+            aa.push_void(new PlString(key));
         }
         return aa;
     }
@@ -7385,18 +8065,15 @@ class PlHash extends PlObject implements Iterable<PlObject> {
         if (this.each_iterator.iterator.hasNext()) {
             Map.Entry<String, PlObject> entry = this.each_iterator.iterator.next();
             String key = entry.getKey();
-            aa.push(new PlString(key));
+            aa.push_void(new PlString(key));
             PlObject value = entry.getValue();
-            aa.push(value);
+            aa.push_void(value);
         }
         else {
             // return empty list
             this.each_iterator.reset();
         }
         return aa;
-    }
-    public PlObject hset(PlObject s, Object o) {
-        return this.hset(s, PlJavaObject.fromObject(o));
     }
     public PlObject hset(String s, Object o) {
         return this.hset(s, PlJavaObject.fromObject(o));
@@ -7406,10 +8083,7 @@ EOT
             my $native = $_;
             my $perl   = $native_to_perl{$native};
             $native && $perl ?
-"    public PlObject hset(PlObject s, $native v) {
-        return this.hset(s, new $perl(v));
-    }
-    public PlObject hset(String s, $native v) {
+"    public PlObject hset(String s, $native v) {
         return this.hset(s, new $perl(v));
     }
 " : ()
@@ -7421,6 +8095,10 @@ EOT
     public String toString() {
         // TODO
         return "" + this.hashCode();
+    }
+    public int to_int() {
+        // TODO
+        return this.hashCode();
     }
     public long to_long() {
         // TODO
@@ -7441,11 +8119,11 @@ EOT
     public boolean is_hash() {
         return true;
     }
-    public PlObject scalar() {
+    public PlScalarImmutable scalar() {
         return this.h.scalar();
     }
 }
-class PlUndef extends PlObject {
+class PlUndef extends PlScalarImmutable {
     public PlUndef() {
     }
     public PlObject apply(int want, PlArray List__) {
@@ -7453,8 +8131,11 @@ class PlUndef extends PlObject {
         PlCORE.die("Can't use an undefined value as a subroutine reference");
         return this;
     }
-    public PlObject length() {
+    public PlScalarImmutable length() {
         return PlCx.UNDEF;
+    }
+    public int to_int() {
+        return 0;
     }
     public long to_long() {
         return 0;
@@ -7481,12 +8162,12 @@ class PlUndef extends PlObject {
     public PlArray array_deref_strict() {
         return (PlArray)PlCORE.die("Can't use an undefined value as an ARRAY reference");
     }
-    public PlObject hash_deref_strict() {
-        return PlCORE.die("Can't use an undefined value as a HASH reference");
+    public PlHash hash_deref_strict() {
+        return (PlHash)PlCORE.die("Can't use an undefined value as a HASH reference");
     }
 
 }
-class PlBool extends PlObject {
+class PlBool extends PlScalarImmutable {
     private final boolean i;
     public PlBool(boolean i) {
         this.i = i;
@@ -7503,6 +8184,14 @@ class PlBool extends PlObject {
         return super.castToClass(params, pos);
     }
 
+    public int to_int() {
+        if (this.i) {
+            return 1;
+        }
+        else {
+            return 0;
+        }
+    }
     public long to_long() {
         if (this.i) {
             return 1;
@@ -7578,7 +8267,7 @@ class PlBool extends PlObject {
         }
     }
 }
-class PlInt extends PlObject {
+class PlInt extends PlScalarImmutable {
     private final long i;
     public PlInt(long i) {
         this.i = i;
@@ -7618,6 +8307,9 @@ class PlInt extends PlObject {
         return super.castToClass(params, pos);
     }
 
+    public int to_int() {
+        return (int)this.i;
+    }
     public long to_long() {
         return this.i;
     }
@@ -7662,7 +8354,7 @@ class PlInt extends PlObject {
         return new PlInt(v * i);
     }
 }
-class PlDouble extends PlObject {
+class PlDouble extends PlScalarImmutable {
     private final double i;
     public PlDouble(double i) {
         this.i = i;
@@ -7699,6 +8391,9 @@ class PlDouble extends PlObject {
         return super.castToClass(params, pos);
     }
 
+    public int to_int() {
+        return (int)(this.i);
+    }
     public long to_long() {
         return (long)(this.i);
     }
@@ -7822,22 +8517,96 @@ class PlStringLazyError extends PlString {
     }
     public String toString() {
         if (this.s == null) {
-            this.s = e.getClass().getSimpleName() + ": " + e.getMessage() + "\n" + java.util.Arrays.toString(e.getStackTrace());
+            this.s = e.getClass().getCanonicalName() + ": " + e.getMessage() + "\n" + java.util.Arrays.toString(e.getStackTrace());
         }
         return this.s;
     }
     public boolean to_boolean() {
         return true;
     }
+
+    public PlObject abs() {
+        this.toString();
+        return this.parse().abs();
+    }
+    public PlObject num_cmp(PlObject b) {
+        this.toString();
+        return this.parse().num_cmp(b);
+    }
+    public PlObject num_cmp2(PlObject b) {
+        this.toString();
+        return b.num_cmp(this.parse());
+    }
+    public boolean is_integer_range() {
+        this.toString();
+        return this.parse().is_integer_range();
+    }
+EOT
+    , ((map {
+            my $perl = $_;
+            my $native  = $number_binop{$perl}{op};
+            my $returns = $number_binop{$perl}{returns};
+            my $num_returns = $number_binop{$perl}{num_returns};
+            if ($returns eq 'PlDouble') {
+"    public PlObject ${perl}(PlObject b) {
+        // 'num' - int, 'num' - num
+        this.toString();
+        return this.parse().${perl}(b);
+    }
+    public PlObject ${perl}2(PlObject b) {
+        // int - 'num'
+        this.toString();
+        return b.${perl}(this.parse());
+    }
+"
+            }
+            else {
+"    public PlObject ${perl}(PlObject b) {
+        // 'num' - int, 'num' - num
+        this.toString();
+        return this.parse().${perl}(b);
+    }
+    public PlObject ${perl}2(PlObject b) {
+        // int - 'num'
+        this.toString();
+        return b.${perl}(this.parse());
+    }
+"
+            }
+            }
+            sort keys %number_binop ))
+
+    , <<'EOT'
 }
 class PlStringConstant extends PlString {
-    private static HashMap<String, PlStringConstant> constants = new HashMap<String, PlStringConstant>();
+    public static HashMap<String, PlStringConstant> constants = new HashMap<String, PlStringConstant>();
 
+    // inherited: String s
     private PlClass cls;
-    private PlObject codeRef;
+    public PlLvalue codeRef;   // CODE
+    public PlLvalue scalarRef; // SCALAR
+    public PlLvalue arrayRef;  // ARRAY
+    public PlLvalue hashRef;   // HASH
+    public PlLvalue fileRef;   // IO
+    // TODO - "FORMAT"
+
+    public String namespace;   // PACKAGE - "main" in "main::x"; maybe null
+    public String name;        // NAME    - "x" in "main::x"; maybe null
 
     public PlStringConstant(String s) {
         super(s);
+
+        int pos = s.lastIndexOf("::");
+        if (pos != -1) {
+            this.namespace = s.substring(0, pos);
+            this.name      = s.substring(pos+2);
+        }
+
+        this.codeRef = new PlLvalue();
+        this.scalarRef = new PlLvalue();
+        this.arrayRef = new PlLvalue(new PlArrayRef());
+        this.hashRef = new PlLvalue(new PlHashRef());
+        this.fileRef = new PlLvalue(new PlFileHandle(s));
     }
 
     public static PlStringConstant getConstant(String s) {
@@ -7849,39 +8618,35 @@ class PlStringConstant extends PlString {
         return v;
     }
 
-    public void setCodeRef(PlObject c) {
-        this.codeRef = c;
-    }
     public PlClass blessed_class() {
         if (cls == null) {
             cls = PlClass.getInstance(s);
         }
         return cls;
     }
+    public PlObject cset(PlObject v) {
+        PlClass.getInstance(this.namespace).invalidate_method_cache(this.name, 0);
+        return this.codeRef.set(v);
+    }
+    public PlObject cset_alias(PlLvalue v) {
+        PlClass.getInstance(this.namespace).invalidate_method_cache(this.name, 0);
+        return this.codeRef = v;
+    }
     public PlObject apply(int want, PlArray List__) {
-        if (this.codeRef == null) {
-            String name = this.toString();
-            PlObject code = PlV.cvar.hget(name);
-            if ( code.is_coderef() ) {
-                this.codeRef = code;
-            }
-            else {
-                int pos = name.lastIndexOf("::");
-                if (pos != -1) {
-                    String namespace = name.substring(0, pos);
-                    PlLvalue autoload = PlV.cget_no_autoload(namespace + "::AUTOLOAD");
-                    if ( autoload.is_coderef() ) {
-                        PlV.sset(namespace + "::AUTOLOAD", new PlString(name));
-                        return autoload.apply(want, List__);
-                    }
+        if (this.codeRef.is_undef()) {
+            if (this.namespace != null) {
+                PlLvalue autoload = PlV.cget_no_autoload(this.namespace + "::AUTOLOAD");
+                if ( autoload.is_coderef() ) {
+                    PlV.sset(this.namespace + "::AUTOLOAD", new PlString(this.s));
+                    return autoload.apply(want, List__);
                 }
-                return PlCORE.die("Undefined subroutine &" + name + " called");
             }
+            return PlCORE.die("Undefined subroutine &" + name + " called");
         }
         return this.codeRef.apply(want, List__);
     }
 }
-class PlString extends PlObject {
+class PlString extends PlScalarImmutable {
     public java.lang.String s;
     private PlObject numericValue;
 
@@ -7910,19 +8675,89 @@ class PlString extends PlObject {
             if (s.equals("$")) {
                 return PerlOp.getPID();
             }
+
+            // special variables like $_ $\
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $perl_name = $_;
+                $perl_name = "\\\\" if $perl_name eq "\\";
+"
+            if (s.equals(\"${perl_name}\")) {
+                return PlV.${java_name};
+            }
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
+
         }
         if (s.indexOf("::") == -1) {
             return PlV.sget( namespace + "::" + s );
         }
+
+        // special variables like $_ $\
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $perl_name = $_;
+                $perl_name = "\\\\" if $perl_name eq "\\";
+"
+        if (s.equals(\"main::${perl_name}\")) {
+            return PlV.${java_name};
+        }
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
+
         return PlV.sget(s);
     }
     public PlObject scalar_deref_strict() {
         return PlCORE.die("Can't use string (\"" + this.s + "\") as a SCALAR ref while \"strict refs\" in use");
     }
     public PlObject scalar_deref_set(String namespace, PlObject v) {
+        if (s.length() == 1) {
+
+            // special variables like $_ $\
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $perl_name = $_;
+                $perl_name = "\\\\" if $perl_name eq "\\";
+"
+            if (s.equals(\"${perl_name}\")) {
+                return PlV.${java_name}.set(v);
+            }
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
+
+        }
         if (s.indexOf("::") == -1) {
             return PlV.sset( namespace + "::" + s, v );
         }
+
+        // special variables like $_ $\
+EOT
+    , (( map {
+                my $java_name = $Perlito5::Java::special_scalar{$_};
+                my $perl_name = $_;
+                $perl_name = "\\\\" if $perl_name eq "\\";
+"
+        if (s.equals(\"main::${perl_name}\")) {
+            return PlV.${java_name}.set(v);
+        }
+"
+            }
+            sort keys %Perlito5::Java::special_scalar
+      ))
+    , <<'EOT'
+
         return PlV.sset(s, v);
     }
     public PlArray array_deref_lvalue() {
@@ -7957,7 +8792,7 @@ class PlString extends PlObject {
         }
         return PlV.hash_get(s);
     }
-    public PlObject hash_deref_strict() {
+    public PlHash hash_deref_strict() {
         PlCORE.die("Can't use string (\"" + this.s + "\") as a HASH ref while \"strict refs\" in use");
         return PlV.hash_get(s);
     }
@@ -8163,6 +8998,9 @@ class PlString extends PlObject {
         }
         return PlCx.INT0;
     }
+    public int to_int() {
+        return this.parse().to_int();
+    }
     public long to_long() {
         return this.parse().to_long();
     }
@@ -8193,7 +9031,7 @@ class PlString extends PlObject {
     public int int_length() {
         return this.s.length();
     }
-    public PlObject length() {
+    public PlScalarImmutable length() {
         return new PlInt(this.s.length());
     }
     public PlObject _decr() {
@@ -8221,8 +9059,10 @@ class PlString extends PlObject {
         }
         String c = _string_increment(s.substring(s.length()-1, s.length()));
         if (c.length() == 1) {
+            // AAAC => AAAD
             return s.substring(0, s.length()-1) + c;
         }
+        // AAAZ => AABA
         return _string_increment(s.substring(0, s.length()-1)) + c.substring(c.length()-1, c.length());
     }
     public PlObject _incr() {
@@ -8316,50 +9156,6 @@ EOT
     , <<'EOT'
 }
 EOT
-        # add "box" classes to Java classes
-        # that were declared with
-        #
-        #   package MyJavaClass { Java }
-        #
-    , (( map {
-                    my $class = $java_classes{$_};
-                    my $java_class_name = $class->{java_type};
-                    my $perl_to_java    = $class->{perl_to_java};
-                    my $perl_package    = $class->{perl_package};
-                    my $java_native_to_perl = $class->{java_native_to_perl};
-                    $class->{import} || $class->{extends} || $class->{implements} ? 
-"class ${java_native_to_perl} extends PlJavaObject {
-    public static final PlStringConstant REF = new PlStringConstant(\"${perl_package}\");
-    private ${java_class_name} stuff;
-
-    public ${java_native_to_perl}(${java_class_name} stuff) {
-        super((Object)stuff);
-        this.stuff = stuff;
-    }
-    public ${java_class_name} ${perl_to_java}() {
-        return this.stuff;
-    }
-    public Object toJava() {
-        return this.stuff;
-    }
-    public PlString ref() {
-        return REF;
-    }
-    public boolean is_JavaObject() {
-        return true;
-    }
-    public boolean is_undef() {
-        return stuff == null;
-    }
-    public PlObject clone() throws CloneNotSupportedException {
-        // TODO - test if implements 'Cloneable' and call stuff.clone() if possible
-        return this;
-    }
-}
-" : ()
-            }
-            sort keys %java_classes
-      ))
 
     # Java API
     # work in progress
@@ -8415,9 +9211,22 @@ class PlJavaObject extends PlReference {
 
     public PerlArgumentLookupResult castToClass(ArrayList<Class[]> params, int pos) {
         // want same Java class
+        // System.out.println("PerlArgumentLookupResult castToClass from " + this.ref_str());
         for (Class[] cl : params) {
+            // System.out.println("  compare to " + cl[pos]);
             if (cl[pos].equals( this.stuff.getClass() )) {
+                // System.out.println("   match");
                 return new PerlArgumentLookupResult( this.stuff, cl[pos] );
+            }
+            // try again with Class.cast()
+            try {
+                cl[pos].cast( this.stuff );
+                // cast returns ok
+                // System.out.println("   can cast()");
+                return new PerlArgumentLookupResult( this.stuff, cl[pos] );
+            }
+            catch (ClassCastException e) {
+                // System.out.println("   cannot cast()");
             }
         }
         // try other things
@@ -8431,14 +9240,30 @@ class PlJavaObject extends PlReference {
         return this.stuff;
     }
     public PlString ref() {
-        return new PlString(stuff.getClass().getSimpleName());
+        return new PlString(stuff.getClass().getCanonicalName());
     }
+    public String ref_str() {
+        return stuff.getClass().getCanonicalName();
+    }
+    public boolean ref_boolean() {
+        return true;
+    }
+
     public PlObject reftype() {
         // Scalar::Util::reftype()
         return ref();
     }
     public String toString() {
+        if (stuff == null) {
+            return "";
+        }
         return this.stuff.toString();
+    }
+    public boolean to_boolean() {
+        if (stuff == null) {
+            return false;
+        }
+        return true;
     }
     public boolean is_JavaObject() {
         return true;

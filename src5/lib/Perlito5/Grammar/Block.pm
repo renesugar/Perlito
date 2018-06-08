@@ -5,6 +5,7 @@ use Perlito5::Grammar::Expression;
 use Perlito5::Grammar::Scope;
 use Perlito5::AST::BeginScratchpad;
 use Perlito5::AST::Captures;
+use Perlito5::FoldConstant;
 use strict;
 
 our %Named_block = (
@@ -123,7 +124,7 @@ sub eval_begin_block {
                       : ( $_->{_id} => $_ )
                       } @captured;
 
-    # print STDERR "CAPTURES ", Data::Dumper::Dumper(\%capture);
+    # print STDERR "CAPTURES ", Perlito5::Dumper::Dumper(\%capture);
 
     # %capture == (
     #     '100' => ...,
@@ -324,6 +325,24 @@ token named_sub_def {
             attributes => $attributes,
             pos        => Perlito5::Compiler::compiler_pos(),
         );
+
+        if ($name && defined $sig && $sig eq '' && $sub->{block} && @{ $sub->{block}{stmts} } == 1 ) {
+            my $expr = $sub->{block}{stmts}[0];
+            $expr = Perlito5::FoldConstant::fold_constant($expr);
+            my $ref = ref($expr);
+            if (   $ref eq 'Perlito5::AST::Int'
+                || $ref eq 'Perlito5::AST::Num'
+                || $ref eq 'Perlito5::AST::Buf'
+               )
+            {
+                # looks like a constant declaration
+
+                # TODO - "Constant subroutine xx redefined"
+
+                # print STDERR "maybe constant $namespace :: $name ($sig)\n";
+                $Perlito5::CONSTANT{"${namespace}::$name"} = $expr;
+            }
+        }
 
         if ( $Perlito5::EXPAND_USE && $name ) {
             # named sub in the normal compiler (not "bootstrapping")

@@ -3,15 +3,14 @@ package Java::Thread {
 };
 
 package ConcurrentLinkedQueue::Of::String {
-    import    => "java.util.concurrent.ConcurrentLinkedQueue",
-    java_type => "ConcurrentLinkedQueue<PlObject>",
+    import    => "java.util.concurrent.ConcurrentLinkedQueue<PlObject>",
 };
 
 my $global_queue = ConcurrentLinkedQueue::Of::String->new();
 
 my Java::Thread $producer = Java::Thread->new(
     sub {
-        my ConcurrentLinkedQueue::Of::String $queue = $global_queue->to_ConcurrentLinkedQueueOfString();
+        my ConcurrentLinkedQueue::Of::String $queue = $global_queue;
         my $x = 1;
         while(1) {
             $x++;
@@ -23,7 +22,7 @@ my Java::Thread $producer = Java::Thread->new(
 my Java::Thread $consumer = Java::Thread->new(
     sub {
         while(1) {
-            my ConcurrentLinkedQueue::Of::String $queue = $global_queue->to_ConcurrentLinkedQueueOfString();
+            my ConcurrentLinkedQueue::Of::String $queue = $global_queue;
             my $x = $queue->poll();
             if (defined $x) {
                 print "consumer got $x\n";
@@ -35,4 +34,7 @@ my Java::Thread $consumer = Java::Thread->new(
 
 $producer->start();
 $consumer->start();
+
+sleep(1);
+say "done";
 

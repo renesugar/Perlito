@@ -1,6 +1,8 @@
 use v5;
 
 package Perlito5::Java::JavaxScript;
+use Perlito5;
+use Perlito5::Runtime;
 use strict;
 
 sub meta_file_name {
@@ -32,6 +34,9 @@ EOT
 sub emit_java_EngineFactory {
     # TODO - get constants from Perlito5::Runtime
 
+    my $engineVersion = $Perlito5::VERSION;
+    my $languageVersion = join ".", @Perlito5::PERL_VERSION;
+
     return <<'EOT'
 package org.perlito.Perlito5;
 
@@ -46,10 +51,6 @@ public final class Perlito5ScriptEngineFactory implements javax.script.ScriptEng
         return "perlito5";
     }
     @Override
-    public String getEngineVersion() {
-        return "1.0";
-    }
-    @Override
     public List<String> getExtensions() {
         return Arrays.asList("pl");
     }
@@ -57,10 +58,18 @@ public final class Perlito5ScriptEngineFactory implements javax.script.ScriptEng
     public String getLanguageName() {
         return "Perl";
     }
-    @Override
-    public String getLanguageVersion() {
-        return "5.26.0";
+EOT
+    . <<"EOT"
+    \@Override
+    public String getEngineVersion() {
+        return "$engineVersion";
     }
+    \@Override
+    public String getLanguageVersion() {
+        return "$languageVersion";
+    }
+EOT
+    . <<'EOT'
     @Override
     public String getMethodCallSyntax(String obj, String m, String[] args) {
         String ret = obj;
@@ -118,6 +127,11 @@ public final class Perlito5ScriptEngineFactory implements javax.script.ScriptEng
     public ScriptEngine getScriptEngine() {
         org.perlito.Perlito5.LibPerl.init();
         org.perlito.Perlito5.Main.main(new String[]{"-Cinit"});
+
+        // turn on autoflush
+        PlV.STDOUT.set_autoflush(PlCx.TRUE);
+        PlV.STDERR.set_autoflush(PlCx.TRUE);
+
         Perlito5ScriptEngine e = new Perlito5ScriptEngine();
         e.setFactory(this);
         return e;
@@ -253,7 +267,7 @@ class Perlito5ScriptEngine implements javax.script.ScriptEngine {
     }
     public Object eval(String script, ScriptContext ctxt) throws ScriptException {
         Object[] ret = org.perlito.Perlito5.Main.apply( "Perlito5::eval_string", script );
-        PlObject perlErr = PlV.sget("main::@");
+        PlObject perlErr = PlV.Scalar_EVAL_ERROR;
         if (perlErr.to_boolean()) {
             throw new ScriptException(perlErr.toString());
         }

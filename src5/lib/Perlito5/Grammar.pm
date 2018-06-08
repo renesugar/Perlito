@@ -13,36 +13,45 @@ use Perlito5::Grammar::Map;
 use Perlito5::Grammar::Attribute;
 use Perlito5::Grammar::Number;
 
+our %is_ident_start = map { $_ => 1 } (
+    'a' .. 'z',
+    'A' .. 'Z',
+    '_'
+);
+our %is_ident_middle = map { $_ => 1 } (
+    'a' .. 'z',
+    'A' .. 'Z',
+    '0' .. '9',
+    '_'
+);
+our %is_var_sigil = map { $_ => 1 } (
+    '$', '%', '@', '&', '*',
+);
+
 sub word {
     my $str = $_[0];
     my $pos = $_[1];
-    return unless
-           ($str->[$pos] ge "a" && $str->[$pos] le "z")
-        || ($str->[$pos] ge "A" && $str->[$pos] le "Z")
-        || ($str->[$pos] ge "0" && $str->[$pos] le "9")
-        || ($str->[$pos] eq "_");
-    $pos++;
-    return {'str' => $_[0], 'from' => $_[1], 'to' => $pos}
+    return unless $is_ident_middle{ $str->[$pos] };
+    return {'str' => $str, 'from' => $pos, 'to' => $pos + 1}
+}
+
+sub var_sigil {
+    my $str = $_[0];
+    my $pos = $_[1];
+    return unless $is_var_sigil{ $str->[$pos] };
+    return {'str' => $str, 'from' => $pos, 'to' => $pos + 1}
 }
 
 sub ident {
     my $str = $_[0];
     my $pos = $_[1];
-    return unless
-           ($str->[$pos] ge "a" && $str->[$pos] le "z")
-        || ($str->[$pos] ge "A" && $str->[$pos] le "Z")
-        || ($str->[$pos] eq "_");
+    return unless $is_ident_start{ $str->[$pos] };
     $pos++;
-    while (
-           ($str->[$pos] ge "a" && $str->[$pos] le "z")
-        || ($str->[$pos] ge "A" && $str->[$pos] le "Z")
-        || ($str->[$pos] ge "0" && $str->[$pos] le "9")
-        || ($str->[$pos] eq "_")
-    ) {
+    while ( $is_ident_middle{ $str->[$pos] } ) {
         $pos++;
     }
     ($pos - $_[1]) > 251 && die('Identifier too long');
-    return {'str' => $_[0], 'from' => $_[1], 'to' => $pos}
+    return {'str' => $str, 'from' => $_[1], 'to' => $pos}
 }
 
 sub caret_char {
@@ -60,7 +69,7 @@ sub caret_char {
     }
     return if $c lt "\cA" || $c gt "\cZ";
     return {
-             str  => $_[0],
+             str  => $str,
              from => $_[1],
              to   => $pos + 1,
              capture => $c,
@@ -103,8 +112,6 @@ token opt_type {
     |   '::'?  <full_ident>   { $MATCH->{capture} = Perlito5::Match::flat($MATCH->{full_ident}) }
     |   ''                    { $MATCH->{capture} = '' }
 };
-
-token var_sigil     { \$ |\% |\@ |\& | \* };
 
 token var_name      { <full_ident> | <Perlito5::Grammar::Number::digits> };
 

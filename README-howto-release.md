@@ -4,9 +4,30 @@
 Perlito5 Release
 ----------------
 
+Note: distribution tests should be runnable with old versions of dependencies.
+
+* install an old version of Perl (for example: 5.14)
+
+* install an old version of `node.js`
+
+* install an old version of Java `JDK` (version 7 or higher)
+
+* set the minimal Perl version in `cpan-Perlito5/Makefile.PL`
+
+    ```
+    MIN_PERL_VERSION => 5.014,
+    ```
+
 * run tests
 
+    ```
+    make clean
+    make
+    make test-5to5
+    make test-5js
+    make test-5jar
     make test
+    ```
 
 * increment version number in "src5/lib/Perlito5.pm"
 
@@ -18,17 +39,24 @@ Perlito5 Release
 
 * go to "cpan-Perlito5" directory and execute "make-Perlito5.sh"
 
+    ```
     cd cpan-Perlito5
-
     . make-Perlito5.sh
+    ```
 
 * build and test the module inside "cpan-Perlito5" directory
 
+    ```
     perl Makefile.PL
     make
     make test
+    ```
 
-* make dist
+* make the distribution file
+
+    ```
+    make dist
+    ```
 
 * publish to pause.perl.org
 
@@ -44,7 +72,7 @@ Perlito5 Release
 
   TODO
 
-* relase perlito5.js to npm
+* release perlito5.js to npm
 
   TODO
 
@@ -54,7 +82,9 @@ Perlito6 Release
 
 * run tests
 
+    ```
     make test-6to5
+    ```
 
 * increment version number in "cpan-v6/v6.pm"
 
@@ -66,15 +96,18 @@ Perlito6 Release
 
 * go to "cpan-v6" directory and execute "make-v6.sh"
 
+    ```
     cd cpan-v6
-
     . make-v6.sh
+    ```
 
 * build and test the module inside "cpan-v6" directory
 
+    ```
     perl Makefile.PL
     make
     make test
+    ```
 
 * make dist
 
@@ -86,6 +119,4 @@ TODO for the release process
 * BUG - "cpan-v6/ChangeLog" is not updated automatically
 
 * BUG - the README files are not included in the cpan distribution
-
-* BUG - version number in src5/lib/Perlito5/Java/JavaxScript.pm is not updated automatically
 

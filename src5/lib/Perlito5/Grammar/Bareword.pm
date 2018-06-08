@@ -319,6 +319,30 @@ sub term_bareword {
 
     # say "calling $effective_name ($sig)";
 
+    if (defined $sig && $sig eq '' ) {
+        # looks like a constant declaration
+        # print STDERR "maybe constant $effective_name ($sig)\n";
+        my $expr = $Perlito5::CONSTANT{"${namespace}::$name"};
+        if ($expr) {
+
+            if ( $str->[$p] eq '(' ) {
+                $p++;
+                my $m = Perlito5::Grammar::Space::ws( $str, $p );
+                if ($m) {
+                    $p = $m->{to}
+                }
+                if ( $str->[$p] ne ')' ) {
+                    Perlito5::Compiler::error( "Too many arguments for ${namespace}::$name" );
+                }
+                $p++;
+            }
+
+            $m_name->{capture} = [ 'term', $expr ];
+            $m_name->{to} = $p;
+            return $m_name;
+        }
+    }
+
     my $has_paren = 0;
     if ( defined $sig ) {
         my $arg_index = 1;
@@ -635,8 +659,8 @@ sub term_bareword {
                     # sub must be predeclared, unless proto is '*'
                     my $name = $arg->{code};
                     my $namespace = $arg->{namespace};
-                    if ($sig && substr($sig, $i, 1) eq '*') {
-                        # proto is '*'
+                    if ($sig && (substr($sig, $i, 1) eq '*' || substr($sig, $i, 2) eq ';*')) {
+                        # proto is '*' or ';*'
                     }
                     else {
                         Perlito5::Compiler::error( 'Bareword "' . ( $namespace ? "${namespace}::" : "" ) . $name . '" not allowed while "strict subs" in use' );

@@ -55,17 +55,78 @@ sub set_java_class_defaults {
     # perl_to_java        => 'to_TheClass',       # generated, can be overridden
     # java_native_to_perl => 'pClass',            # generated
     #
+    # import              => 'full.path.Class<String>',   # Java class path + type argument
+    #
     my $Java_class = Perlito5::Java::get_java_class_info();
     my @parts = split /\./, $java_import;
-    $Java_class->{$perl_package}->{java_type} //= $parts[-1];
-    $Java_class->{$perl_package}->{java_native_to_perl} //= 'p' . $Java_class->{$perl_package}->{java_type};
+    # $Java_class->{$perl_package}->{java_type} //= $parts[-1];
+    $Java_class->{$perl_package}->{java_type} //= $java_import;
+    $Java_class->{$perl_package}->{java_native_to_perl} //= 'p' . $parts[-1];
     # "List<String>" becomes "PlList_String_"
     $Java_class->{$perl_package}->{java_native_to_perl} =~ s/[<>]/_/g;
-    my $perl_to_java = $perl_package;
-    $perl_to_java =~ s/:://g;
-    $Java_class->{$perl_package}->{perl_to_java} //= "to_${perl_to_java}";
+    # my $perl_to_java = $perl_package;
+    # $perl_to_java =~ s/:://g;
+    # $Java_class->{$perl_package}->{perl_to_java} //= "to_${perl_to_java}";
     $Java_class->{$perl_package}->{perl_package} = $perl_package;
 }
+
+our %is_long_type = (
+    'long'           => 1,
+    'Long'           => 1,
+    'java.lang.Long' => 1,
+);
+our %is_float_type = (
+    'float'           => 1,
+    'Float'           => 1,
+    'java.lang.Float' => 1,
+);
+our %is_char_type = (
+    'char'                => 1,
+    'Character'           => 1,
+    'java.lang.Character' => 1,
+);
+our %is_double_type = (
+    'double'           => 1,
+    'Double'           => 1,
+    'java.lang.Double' => 1,
+);
+our %is_boolean_type = (
+    'boolean'           => 1,
+    'Boolean'           => 1,
+    'java.lang.Boolean' => 1,
+);
+our %is_char_type = (
+    'char'                => 1,
+    'Character'           => 1,
+    'java.lang.Character' => 1,
+);
+our %is_int_type = (
+    'int'               => 1,
+    'Integer'           => 1,
+    'java.lang.Integer' => 1,
+);
+our %is_short_type = (
+    'short'           => 1,
+    'Short'           => 1,
+    'java.lang.Short' => 1,
+);
+our %is_byte_type = (
+    'byte'           => 1,
+    'Byte'           => 1,
+    'java.lang.Byte' => 1,
+);
+
+our %stringify = (
+    byte    => "Byte.toString",
+    short   => "Short.toString",
+    int     => "Integer.toString",
+    long    => "Long.toString",
+    float   => "Float.toString",
+    double  => "Double.toString",
+    char    => "Character.toString",
+    boolean => "Boolean.toString",
+);
+
 sub init_java_class {
     my $Java_class = Perlito5::Java::get_java_class_info();
     $Java_class->{String} = {
@@ -270,6 +331,7 @@ our %op_to_num = map +($_ => 1), qw(
     rindex
     ord
     oct
+    int
     infix:<->
     infix:<+>
     infix:<*>
@@ -278,6 +340,26 @@ our %op_to_num = map +($_ => 1), qw(
     infix:<**>
     infix:<|>
     infix:<&>
+);
+# these operators always return "scalar"
+our %op_to_scalar = map +($_ => 1), (
+    keys %op_to_str,
+    keys %op_to_num,
+    keys %op_to_boolean,
+    'circumfix:<[ ]>',
+    'circumfix:<{ }>',
+    qw(
+        infix:<cmp>
+        infix:<<=>>
+        postfix:<++>
+        postfix:<-->
+        prefix:<++>
+        prefix:<-->
+        bless
+    ),
+    # exceptions:
+    #   'prefix:<\\>' because '\(@a)' is a list
+    #   'infix:<=>'   depends on the sigil
 );
 # these operators will generate native Java code when possible
 our %native_op = qw(
@@ -330,81 +412,98 @@ our %valid_java_statement = qw(
     untie           1
     warn            1
 ); 
+# these variables will be optimized
+our %special_scalar = (
+    '_'  => "Scalar_ARG",           # $_
+    '\\' => "Scalar_OUTPUT_RECORD_SEPARATOR",  # $\
+    '|'  => "Scalar_AUTOFLUSH",     # $|
+    '@'  => "Scalar_EVAL_ERROR",    # $@
+);
 
 my %safe_char = (
-    ' ' => 1,
-    '!' => 1,
-    '#' => 1,
-    '$' => 1,
-    '%' => 1,
-    '&' => 1,
-    '(' => 1,
-    ')' => 1,
-    '*' => 1,
-    '+' => 1,
-    ',' => 1,
-    '-' => 1,
-    '.' => 1,
-    '/' => 1,
-    ':' => 1,
-    ';' => 1,
-    '<' => 1,
-    '=' => 1,
-    '>' => 1,
-    '?' => 1,
-    '@' => 1,
-    '[' => 1,
-    ']' => 1,
-    '^' => 1,
-    '_' => 1,
-    '`' => 1,
-    '{' => 1,
-    '|' => 1,
-    '}' => 1,
-    '~' => 1,
+    '\\'    => '\\\\',
+    '"'     => '\\"',
+    chr(10) => '\\n',
+    chr(13) => '\\r',
+    map { $_ => $_ } (
+        'A' .. 'Z',
+        'a' .. 'z',
+        '0' .. '9',
+        ' ',
+        '!',
+        '#',
+        '$',
+        '%',
+        '&',
+        "'",
+        '(',
+        ')',
+        '*',
+        '+',
+        ',',
+        '-',
+        '.',
+        '/',
+        ':',
+        ';',
+        '<',
+        '=',
+        '>',
+        '?',
+        '@',
+        '[',
+        ']',
+        '^',
+        '_',
+        '`',
+        '{',
+        '|',
+        '}',
+        '~',
+    ),
 );
 
 sub escape_string {
     my $s = shift;
-    my @out;
-    my $tmp = '';
+    my @out = '"';
     my $has_char = 0;
     return '""' if $s eq '';
-    for my $i (0 .. length($s) - 1) {
-        my $c = substr($s, $i, 1);
-        if  (  ($c ge 'a' && $c le 'z')
-            || ($c ge 'A' && $c le 'Z')
-            || ($c ge '0' && $c le '9')
-            || exists( $safe_char{$c} )
-            )
-        {
-            $tmp = $tmp . $c;
+    my $v;
+    for my $c ( split "", $s ) {
+        $v = $safe_char{$c};
+        if ( !defined $v ) {
+            if (ord($c) > 65535) {
+    
+                # this is necessary to support characters with code > 65535
+                # new String(Character.toChars((int)(1114109L)))
+    
+                $v = $safe_char{$c} = "\" + new String(Character.toChars(" . ord($c) . ")) + \"";
+            }
+            else {
+                $v = $safe_char{$c} = "\" + (char)" . ord($c) . " + \"";
+            }
         }
-        elsif (ord($c) > 65535) {
-
-            # this is necessary to support characters with code > 65535
-            # new String(Character.toChars((int)(1114109L)))
-
-            push @out, "\"$tmp\"" if $tmp ne '';
-            push @out, "new String(Character.toChars(" . ord($c) . "))";
-            $has_char = 1;
-            $tmp = '';
-        }
-        else {
-            push @out, "\"$tmp\"" if $tmp ne '';
-            push @out, "(char)" . ord($c) . "";
-            $has_char = 1;
-            $tmp = '';
-        }
+        push @out, $v;
     }
-    push @out, "\"$tmp\"" if $tmp ne '';
-    unshift @out, '""' if $has_char;
-    return $out[0] if @out == 1;
-    return '(' . join(' + ', @out) . ')';
+    push @out, "\"";
+    return join("", @out);
 }
 
 sub is_native {
     my $self = shift;
+
+    if ( ref($self) eq 'Perlito5::AST::Var' ) {
+        my $id    = $self->{_id};
+        my $sigil = $self->{_real_sigil} || $self->{sigil};
+        if ( $sigil eq '$' && $id ) {
+            my $Java_var = Perlito5::Java::get_java_var_info();
+            my $type = $Java_var->{ $id }{type} || 'PlLvalue';
+            if ($type ne 'PlLvalue') {
+                # my Integer $i
+                return 1;
+            }
+        }
+    }
 
     if ( ref($self) eq 'Perlito5::AST::Call' ) {
 
@@ -474,53 +573,76 @@ sub is_native_bool {
     if (is_native_args([$self])) {
         return 1;
     }
-    my $is_apply = $self->isa( 'Perlito5::AST::Apply' ) && $self->{arguments} && @{$self->{arguments}};
+    my $is_apply = (ref($self) eq 'Perlito5::AST::Apply' ) && $self->{arguments} && @{$self->{arguments}};
     if ($is_apply && exists $native_op_to_boolean{ $self->{code} } && is_native_args($self->{arguments})) {
         return 1;
     }
     return 0;
 }
 
-sub to_native_args {
-        my $args = shift;
+sub to_native_arg {
+        my $cond = shift;
         my $level = shift;
+        my $java_type = shift // '';
         my $wantarray = 'scalar';
-        my $s = '';
-        my @out;
 
-        for my $cond (@$args) {
-            my $is_apply = $cond->isa( 'Perlito5::AST::Apply' ) && $cond->{arguments} && @{$cond->{arguments}};
+        return to_native_int($cond, $level, $java_type)
+            if $is_long_type{$java_type} || $is_int_type{$java_type};
+        return to_native_num($cond, $level, $java_type)
+            if $is_float_type{$java_type} || $is_double_type{$java_type};
+        return to_native_bool($cond, $level, $java_type)  if $is_boolean_type{$java_type};
+        return to_native_char($cond, $level, $java_type)  if $is_char_type{$java_type};
+        return to_native_short($cond, $level, $java_type) if $is_short_type{$java_type};
+        return to_native_byte($cond, $level, $java_type)  if $is_byte_type{$java_type};
 
-            if ( $is_apply && $cond->code eq 'circumfix:<( )>') {
-                push @out, to_native_args( $cond->{arguments}[0], $level );
-            }
-            elsif ( $is_apply && exists $native_op{ $cond->code } ) {
-                # TODO - cast arguments to "number", "string" or "boolean" depending on operator
-                push @out, '(' . to_native_num($cond->{arguments}[0], $level, $wantarray) .
-                    ' ' . $native_op{ $cond->code } . ' ' . to_native_num($cond->{arguments}[1], $level, $wantarray) . ')';
-            }
-            elsif ( $is_apply && exists $op_to_num{ $cond->code } ) {
-                push @out, '(' . $cond->emit_java($level, $wantarray) . ').' .
+        my $is_apply = (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{arguments} && @{$cond->{arguments}};
+
+        if ( $is_apply && exists $native_op{ $cond->{code} } ) {
+            # TODO - cast arguments to "number", "string" or "boolean" depending on operator
+            return '(' . to_native_num($cond->{arguments}[0], $level) .
+                ' ' . $native_op{ $cond->{code} } . ' ' . to_native_num($cond->{arguments}[1], $level) . ')';
+        }
+        elsif ( $is_apply && exists $op_to_num{ $cond->{code} } ) {
+            if (@{$cond->{arguments}} == 2) {
+                return '(' . $cond->emit_java($level, $wantarray) . ').' .
                     (${$cond->{arguments}}[0]->isa( 'Perlito5::AST::Num' ) || ${$cond->{arguments}}[1]->isa( 'Perlito5::AST::Num' )
                         ? 'to_double()' : 'to_long()');
             }
-            elsif ( $is_apply && exists $op_to_str{ $cond->code } ) {
-                push @out, '(' . $cond->emit_java($level, $wantarray) . ').toString()';
+            if (@{$cond->{arguments}} == 1) {
+                return '(' . $cond->emit_java($level, $wantarray) . ').' .
+                    (${$cond->{arguments}}[0]->isa( 'Perlito5::AST::Num' )
+                        ? 'to_double()' : 'to_long()');
             }
-            elsif ( $cond->isa( 'Perlito5::AST::Apply' ) && $cond->{code} eq 'undef' ) {
-                push @out, 'null';
-            }
-            elsif ($cond->isa( 'Perlito5::AST::Buf' )) {
-                push @out, Perlito5::Java::escape_string( $cond->{buf} );
-            }
-            elsif ($cond->isa( 'Perlito5::AST::Int' )) {
-                push @out, $cond->{int};
-            }
-            elsif ($cond->isa( 'Perlito5::AST::Num' )) {
-                push @out, $cond->{num};
+        }
+        elsif ( $is_apply && exists $op_to_str{ $cond->{code} } ) {
+            return '(' . $cond->emit_java($level, $wantarray) . ').toString()';
+        }
+        elsif ( (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{code} eq 'undef' ) {
+            return 'null';
+        }
+        elsif ((ref($cond) eq 'Perlito5::AST::Buf' )) {
+            return Perlito5::Java::escape_string( $cond->{buf} );
+        }
+        elsif ((ref($cond) eq 'Perlito5::AST::Int' )) {
+            return $cond->{int};
+        }
+        elsif ((ref($cond) eq 'Perlito5::AST::Num' )) {
+            return $cond->{num};
+        }
+        return $cond->emit_java($level, $wantarray);
+}
+
+sub to_native_args {
+        my $args = shift;
+        my $level = shift;
+        my $java_type = shift;
+        my @out;
+        for my $cond (@$args) {
+            if ( ref($cond) eq 'Perlito5::AST::Apply' && $cond->{arguments} && $cond->{code} eq 'circumfix:<( )>') {
+                push @out, to_native_args( $cond->{arguments}, $level, $java_type )
             }
             else {
-                push @out, $cond->emit_java($level, $wantarray);
+                push @out, to_native_arg( $cond, $level, $java_type );
             }
         }
         return join(', ', @out);
@@ -533,35 +655,35 @@ sub is_native_args {
         my @out;
 
         for my $cond (@$args) {
-            my $is_apply = $cond->isa( 'Perlito5::AST::Apply' ) && $cond->{arguments} && @{$cond->{arguments}};
+            my $is_apply = (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{arguments} && @{$cond->{arguments}};
 
-            if ( $is_apply && $cond->code eq 'circumfix:<( )>') {
+            if ( $is_apply && $cond->{code} eq 'circumfix:<( )>') {
                 return 0 unless is_native_args($cond->{arguments});
             }
-            elsif ( $is_apply && exists $native_op{ $cond->code } ) {
+            elsif ( $is_apply && exists $native_op{ $cond->{code} } ) {
                 return 0 unless is_native_args($cond->{arguments});
             }
-            elsif ( $is_apply && exists $native_op_unary{ $cond->code } ) {
+            elsif ( $is_apply && exists $native_op_unary{ $cond->{code} } ) {
                 return 0 unless is_native_args($cond->{arguments});
             }
-            # elsif ( $is_apply && exists $op_to_num{ $cond->code } ) {
+            # elsif ( $is_apply && exists $op_to_num{ $cond->{code} } ) {
             #     push @out, '(' . $cond->emit_java($level, $wantarray) . ').' .
             #         (${$cond->{arguments}}[0]->isa( 'Perlito5::AST::Num' ) || ${$cond->{arguments}}[1]->isa( 'Perlito5::AST::Num' )
             #             ? 'to_double()' : 'to_long()');
             # }
-            # elsif ( $is_apply && exists $op_to_str{ $cond->code } ) {
+            # elsif ( $is_apply && exists $op_to_str{ $cond->{code} } ) {
             #     push @out, '(' . $cond->emit_java($level, $wantarray) . ').toString()';
             # }
-            # elsif ( $cond->isa( 'Perlito5::AST::Apply' ) && $cond->{code} eq 'undef' ) {
+            # elsif ( (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{code} eq 'undef' ) {
             #     push @out, 'null';
             # }
-            # elsif ($cond->isa( 'Perlito5::AST::Buf' )) {
+            # elsif ((ref($cond) eq 'Perlito5::AST::Buf' )) {
             #     push @out, Perlito5::Java::escape_string( $cond->{buf} );
             # }
-            elsif ($cond->isa( 'Perlito5::AST::Int' )) {
+            elsif ((ref($cond) eq 'Perlito5::AST::Int' )) {
                 ;
             }
-            elsif ($cond->isa( 'Perlito5::AST::Num' )) {
+            elsif ((ref($cond) eq 'Perlito5::AST::Num' )) {
                 ;
             }
             elsif ( ref($cond) eq 'Perlito5::AST::Var' && $cond->{_id} ) {
@@ -580,49 +702,31 @@ sub is_native_args {
         return 0;
 }
 
-sub to_native_bool {
-        my $cond = shift;
-        my $level = shift;
-        my $wantarray = shift;
-        if (  $cond->isa( 'Perlito5::AST::Apply' ) && $cond->code eq 'circumfix:<( )>'
-           && $cond->{arguments} && @{$cond->{arguments}}
-           )
-        {
-            return to_native_bool( $cond->{arguments}[0], $level, $wantarray )
-        }
-        elsif ($cond->isa( 'Perlito5::AST::Int' )) {
-            if ($cond->{int} == 0) {
-                return 'false';
-            }
-            return '(' . $cond->{int} . ' != 0)';
-        }
-        elsif ($cond->isa( 'Perlito5::AST::Num' )) {
-            if ($cond->{num} == 0.0) {
-                return 'false';
-            }
-            return '(' . $cond->{num} . ' != 0.0)';
-        }
-        else {
-            # TODO - ensure "bool"
-            return to_native_args([$cond], $level);
-        }
-}
-
 sub to_native_num {
         my $cond = shift;
         my $level = shift;
-        my $wantarray = shift;
-        if (  $cond->isa( 'Perlito5::AST::Apply' ) && $cond->code eq 'circumfix:<( )>'
+        my $java_type = shift // '';
+
+        if (  (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{code} eq 'circumfix:<( )>'
            && $cond->{arguments} && @{$cond->{arguments}}
            )
         {
-            return to_native_num( $cond->{arguments}[0], $level, $wantarray )
+            return to_native_num( $cond->{arguments}[0], $level, $java_type )
         }
-        elsif ($cond->isa( 'Perlito5::AST::Int' )) {
-            return $cond->{int};
+        elsif ((ref($cond) eq 'Perlito5::AST::Buf' )) {
+            my $type_spec = 'D';
+            $type_spec = 'F' if $is_float_type{$java_type};
+            return ( 0 + $cond->{buf} ) . $type_spec;
         }
-        elsif ($cond->isa( 'Perlito5::AST::Num' )) {
-            return $cond->{num};
+        elsif ((ref($cond) eq 'Perlito5::AST::Int' )) {
+            my $type_spec = 'D';
+            $type_spec = 'F' if $is_float_type{$java_type};
+            return $cond->{int} . $type_spec;
+        }
+        elsif ((ref($cond) eq 'Perlito5::AST::Num' )) {
+            my $type_spec = 'D';
+            $type_spec = 'F' if $is_float_type{$java_type};
+            return $cond->{num} . $type_spec;
         }
         else {
             # TODO - ensure "num"
@@ -630,73 +734,135 @@ sub to_native_num {
         }
 }
 
+sub to_native_char {
+        my $cond = shift;
+        my $level = shift;
+        my $java_type = shift // '';
+        return '(char)(' . to_native_int( $cond, $level, 'int' ) . ')' if $java_type eq 'char';
+        return '(new Character((char)' . to_native_int( $cond, $level, 'int' ) . '))';
+}
+
+sub to_native_byte {
+        my $cond = shift;
+        my $level = shift;
+        my $java_type = shift // '';
+        return '(byte)(' . to_native_int( $cond, $level, 'int' ) . ')';
+}
+
+sub to_native_short {
+        my $cond = shift;
+        my $level = shift;
+        my $java_type = shift // '';
+        return '(short)(' . to_native_int( $cond, $level, 'int' ) . ')';
+}
+
 sub to_native_str {
         my $cond = shift;
         my $level = shift;
         my $wantarray = shift;
-        if (  $cond->isa( 'Perlito5::AST::Apply' ) && $cond->code eq 'circumfix:<( )>'
-           && $cond->{arguments} && @{$cond->{arguments}}
-           )
-        {
-            return to_native_str( $cond->{arguments}[0], $level, $wantarray )
+        if ( (ref($cond) eq 'Perlito5::AST::Apply') && $cond->{arguments} && @{$cond->{arguments}} ) {
+            if (  $cond->{code} eq 'circumfix:<( )>' ) {
+                return to_native_str( $cond->{arguments}[0], $level, $wantarray )
+            }
+            if (  $cond->{code} eq 'ref' ) {
+                return $cond->{arguments}[0]->emit_java( $level, $wantarray ) . '.ref_str()';
+            }
+            if (  $cond->{code} eq 'list:<.>' ) {
+                return '(' . join( ' + ', map( Perlito5::Java::to_native_str($_, $level, 'scalar'), @{ $cond->{arguments} } ) ) . ')';
+            }
         }
-        if ($cond->isa( 'Perlito5::AST::Buf' )) {
+        if ((ref($cond) eq 'Perlito5::AST::Buf' )) {
             return Perlito5::Java::escape_string( $cond->{buf} );
         }
-        elsif ($cond->isa( 'Perlito5::AST::Int' )) {
+        elsif ((ref($cond) eq 'Perlito5::AST::Int' )) {
             return Perlito5::Java::escape_string( $cond->{int} );
         }
-        elsif ($cond->isa( 'Perlito5::AST::Num' )) {
+        elsif ((ref($cond) eq 'Perlito5::AST::Num' )) {
             return Perlito5::Java::escape_string( $cond->{num} );
         }
-        else {
-            return $cond->emit_java($level, $wantarray) . '.toString()';
+        elsif ( ref($cond) eq 'Perlito5::AST::Var' && $cond->{_id} ) {
+            my $id = $cond->{_id};
+            my $Java_var = Perlito5::Java::get_java_var_info();
+            my $type = $Java_var->{ $id }{type} || 'PlLvalue';
+            if ($type ne 'PlLvalue') {
+                return $stringify{$type} . '(' . $cond->emit_java($level, $wantarray) . ')' if $stringify{$type};
+            }
         }
+        return $cond->emit_java($level, $wantarray) . '.toString()';
 }
 
-sub to_array_index {
+sub to_native_int {
         my $cond = shift;
         my $level = shift;
-        my $wantarray = shift;
-        if (  $cond->isa( 'Perlito5::AST::Apply' ) && $cond->code eq 'circumfix:<( )>'
-           && $cond->{arguments} && @{$cond->{arguments}}
-           )
-        {
-            return to_array_index( $cond->{arguments}[0], $level, $wantarray )
+        my $java_type = shift // 'int';
+        my $wantarray = 'scalar';
+
+        my $type_spec = '';
+        $type_spec = 'L' if $is_long_type{$java_type};
+
+        my $cast = '.to_int()';
+        $cast = '.to_long()' if $is_long_type{$java_type};
+
+        my $is_apply = (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{arguments} && @{$cond->{arguments}};
+
+        if ($is_apply) {
+
+            if ( $cond->{code} eq 'circumfix:<( )>' ) {
+                return to_native_int( $cond->{arguments}[0], $level, $java_type )
+            }
+            # elsif ( exists $native_op{ $cond->{code} } ) {
+            #     return '(' . to_native_num($cond->{arguments}[0], $level, $java_type) . ' '
+            #         . $native_op{ $cond->{code} } . ' '
+            #         . to_native_num($cond->{arguments}[1], $level, $java_type) . ')';
+            # }
+
+            if (  $cond->{code} eq 'infix:<+>'
+               && (   $cond->{arguments}[0]->isa( 'Perlito5::AST::Int' )
+                  ||  $cond->{arguments}[1]->isa( 'Perlito5::AST::Int' ) )
+               )
+            {
+                return to_native_int( $cond->{arguments}[0], $level, $java_type ) . " + " . to_native_int( $cond->{arguments}[1], $level, $java_type );
+            }
+
         }
-        if ($cond->isa( 'Perlito5::AST::Buf' )) {
-            return int( 0 + $cond->{buf} );
+
+        if (  (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{code} eq 'undef' ) {
+            return '0' . $type_spec;
         }
-        elsif ($cond->isa( 'Perlito5::AST::Int' )) {
-            return int( 0 + $cond->{int} );
+
+        if ((ref($cond) eq 'Perlito5::AST::Buf' )) {
+            return int( 0 + $cond->{buf} ) . $type_spec;
         }
-        elsif ($cond->isa( 'Perlito5::AST::Num' )) {
-            return int( 0 + $cond->{num} );
+        elsif ((ref($cond) eq 'Perlito5::AST::Int' )) {
+            return int( 0 + $cond->{int} ) . $type_spec;
         }
-        else {
-            return $cond->emit_java($level, $wantarray);
+        elsif ((ref($cond) eq 'Perlito5::AST::Num' )) {
+            return int( 0 + $cond->{num} ) . $type_spec;
         }
+
+        return $cond->emit_java($level, $wantarray) if is_native($cond);    # java native call
+        return $cond->emit_java($level, $wantarray) . $cast;
 }
 
 sub to_str {
         my $cond = shift;
         my $level = shift;
         my $wantarray = 'scalar';
-        if (  $cond->isa( 'Perlito5::AST::Apply' ) && $cond->code eq 'circumfix:<( )>'
+        if (  (ref($cond) eq 'Perlito5::AST::Apply' ) && $cond->{code} eq 'circumfix:<( )>'
            && $cond->{arguments} && @{$cond->{arguments}}
            ) 
         {
             return to_str( $cond->{arguments}[0], $level )
         }
 
-        if  (  ($cond->isa( 'Perlito5::AST::Buf' ))
-            || ($cond->isa( 'Perlito5::AST::Apply' )  && exists $op_to_str{ $cond->code } )
+        if  (  ((ref($cond) eq 'Perlito5::AST::Buf' ))
+            || ((ref($cond) eq 'Perlito5::AST::Apply' )  && exists $op_to_str{ $cond->{code} } )
             )
         {
             return $cond->emit_java($level, $wantarray);
         }
         else {
-            return 'new PlString(' . $cond->emit_java($level, $wantarray) . '.toString())';
+            return 'new PlString(' . to_native_str($cond, $level, $wantarray) . ')';
         }
 }
 sub to_num {
@@ -704,9 +870,9 @@ sub to_num {
         my $level = shift;
         my $type = shift;
         my $wantarray = 'scalar';
-        if  (  $cond->isa( 'Perlito5::AST::Int' ) 
-            || $cond->isa( 'Perlito5::AST::Num' )
-            || ($cond->isa( 'Perlito5::AST::Apply' )  && exists $op_to_num{ $cond->code } )
+        if  (  (ref($cond) eq 'Perlito5::AST::Int' ) 
+            || (ref($cond) eq 'Perlito5::AST::Num' )
+            || ((ref($cond) eq 'Perlito5::AST::Apply' )  && exists $op_to_num{ $cond->{code} } )
             )
         {
             return $cond->emit_java($level, $wantarray);
@@ -719,7 +885,8 @@ sub to_num {
             return 'new PlDouble(' . $cond->emit_java($level, $wantarray) . '.to_double())';
         }
 }
-sub to_boolean {
+
+sub to_native_bool {
         my $cond = shift;
         my $level = shift;
         my $wantarray = 'scalar';
@@ -727,80 +894,128 @@ sub to_boolean {
 
         if (  $class eq 'Perlito5::AST::Apply' ) {
 
-            if (  $cond->code eq 'circumfix:<( )>'
+            if (  $cond->{code} eq 'circumfix:<( )>'
                && $cond->{arguments} && @{$cond->{arguments}}
                ) 
             {
                 if (@{$cond->{arguments}} == 1) {
-                    return to_boolean( $cond->{arguments}[0], $level );
+                    return to_native_bool( $cond->{arguments}[0], $level );
                 }
+            }
+            if (  $cond->{code} eq 'undef' ) {
+                return 'false';
+            }
+            if (  $cond->{code} eq 'ref'
+               && $cond->{arguments} && @{$cond->{arguments}}
+               )
+            {
+                return $cond->{arguments}[0]->emit_java( $level, $wantarray ) . '.ref_boolean()';
             }
 
             # Note: 'infix:<||>' and 'infix:<&&>' can only be optimized here because we know we want "bool"
-            if (  $cond->code eq 'infix:<&&>'
-               || $cond->code eq 'infix:<and>'
+            if (  $cond->{code} eq 'infix:<&&>'
+               || $cond->{code} eq 'infix:<and>'
                ) 
             {
-                return '(' . to_boolean($cond->{arguments}->[0], $level) . ' && '
-                           . to_boolean($cond->{arguments}->[1], $level) . ')'
+                return '(' . to_native_bool($cond->{arguments}->[0], $level) . ' && '
+                           . to_native_bool($cond->{arguments}->[1], $level) . ')'
             }
-            if (  $cond->code eq 'infix:<||>'
-               || $cond->code eq 'infix:<or>'
+            if (  $cond->{code} eq 'infix:<||>'
+               || $cond->{code} eq 'infix:<or>'
                ) 
             {
-                return '(' . to_boolean($cond->{arguments}->[0], $level) . ' || '
-                           . to_boolean($cond->{arguments}->[1], $level) . ')'
+                return '(' . to_native_bool($cond->{arguments}->[0], $level) . ' || '
+                           . to_native_bool($cond->{arguments}->[1], $level) . ')'
             }
-            if (  $cond->code eq 'prefix:<!>'
-               || $cond->code eq 'prefix:<not>'
+            if (  $cond->{code} eq 'prefix:<!>'
+               || $cond->{code} eq 'prefix:<not>'
                )
             {
                 if (@{$cond->{arguments}} == 1) {
-                    return '!' . to_boolean($cond->{arguments}->[0], $level)
+                    return '!' . to_native_bool($cond->{arguments}->[0], $level)
                 }
             }
-            if (  $cond->code eq 'infix:<eq>' ) {
+            if (  $cond->{code} eq 'infix:<eq>' ) {
                 return       to_native_str($cond->{arguments}->[0], $level, 'scalar') . '.equals('
                            . to_native_str($cond->{arguments}->[1], $level, 'scalar') . ')'
             }
-            if (  $cond->code eq 'infix:<ne>' ) {
+            if (  $cond->{code} eq 'infix:<ne>' ) {
                 return '!' . to_native_str($cond->{arguments}->[0], $level, 'scalar') . '.equals('
                            . to_native_str($cond->{arguments}->[1], $level, 'scalar') . ')'
             }
-            if (  $cond->code eq 'infix:<le>' ) {
+            if (  $cond->{code} eq 'infix:<le>' ) {
                 return '(' . to_native_str($cond->{arguments}->[0], $level, 'scalar') . '.compareTo('
                            . to_native_str($cond->{arguments}->[1], $level, 'scalar') . ') <= 0)'
             }
-            if (  $cond->code eq 'infix:<ge>' ) {
+            if (  $cond->{code} eq 'infix:<ge>' ) {
                 return '(' . to_native_str($cond->{arguments}->[0], $level, 'scalar') . '.compareTo('
                            . to_native_str($cond->{arguments}->[1], $level, 'scalar') . ') >= 0)'
             }
-            if (  $cond->code eq 'infix:<lt>' ) {
+            if (  $cond->{code} eq 'infix:<lt>' ) {
                 return '(' . to_native_str($cond->{arguments}->[0], $level, 'scalar') . '.compareTo('
                            . to_native_str($cond->{arguments}->[1], $level, 'scalar') . ') < 0)'
             }
-            if (  $cond->code eq 'infix:<gt>' ) {
+            if (  $cond->{code} eq 'infix:<gt>' ) {
                 return '(' . to_native_str($cond->{arguments}->[0], $level, 'scalar') . '.compareTo('
                            . to_native_str($cond->{arguments}->[1], $level, 'scalar') . ') > 0)'
             }
-            if (  $cond->code eq 'defined' ) {
-                if (@{$cond->{arguments}} == 1) {
-                    my $arg = $cond->{arguments}[0];
-                    if (  ref( $arg ) eq 'Perlito5::AST::Var' 
-                       && $arg->{sigil} eq '$'
-                       )
-                    {
-                        return '!' . $arg->emit_java($level, 'scalar') . '.is_undef()';
-                    }
-                }
+
+            if ( exists $native_op_to_boolean{ $cond->{code} } && is_native_args($cond->{arguments}) ) {
+                return '(' . to_native_num($cond->{arguments}[0], $level) .
+                    ' ' . $native_op_to_boolean{ $cond->{code} }
+                    . ' ' . to_native_num($cond->{arguments}[1], $level) . ')';
             }
+
+            if (  $cond->{code} eq 'defined' ) {
+                my $arg = $cond->{arguments}[0];
+                if (  ref( $arg ) eq 'Perlito5::AST::Apply' 
+                   && $arg->{code} eq 'prefix:<&>'
+                   )
+                {
+                    my $arg2   = $arg->{arguments}->[0];
+                    return '!PlV.code_lookup_by_name_no_autoload(' . Perlito5::Java::escape_string($Perlito5::PKG_NAME ) . ', ' . $arg2->emit_java($level) . ').is_undef()';
+                }
+                elsif (  ref( $arg ) eq 'Perlito5::AST::Var' 
+                   && $arg->{sigil} eq '&'
+                   )
+                {
+                    my $name = $arg->{name};
+                    my $namespace = $arg->{namespace} || $Perlito5::PKG_NAME;
+                    return '!PlV.cget_no_autoload(' . Perlito5::Java::escape_string($namespace . '::' . $name) . ').is_undef()';
+                }
+                if (is_native($arg)) {
+                    return $arg->emit_java($level, 'scalar') . ' != null'
+                }
+                return '!' . $arg->emit_java($level, 'scalar') . '.is_undef()';
+            }
+            # if (  $cond->{code} eq 'prefix:<@>'
+            #    )
+            # {
+            #     if (@{$cond->{arguments}} == 1) {
+            #         return $cond->{arguments}->[0]->emit_java($level, $wantarray) . '.length_of_array_boolean()';
+            #     }
+            # }
         }
 
-        if  (  ($class eq 'Perlito5::AST::Int' )
-            || ($class eq 'Perlito5::AST::Num' )
-            || ($class eq 'Perlito5::AST::Apply'  && exists $op_to_boolean{ $cond->code })
-            )
-        {
+        if (  $class eq 'Perlito5::AST::Var' && $cond->{sigil} eq '@' ) {
+            return $cond->emit_java($level, "list") . '.length_of_array_boolean()';
+        }
+        elsif ($class eq 'Perlito5::AST::Int') {
+            if ($cond->{int} == 0) {
+                return 'false';
+            }
+            return '(' . $cond->{int} . ' != 0)';
+        }
+        elsif ($class eq 'Perlito5::AST::Num') {
+            if ($cond->{num} == 0.0) {
+                return 'false';
+            }
+            return '(' . $cond->{num} . ' != 0.0)';
+        }
+
+        return $cond->emit_java($level, $wantarray) if is_native($cond);    # java native call
+
+        if  ($class eq 'Perlito5::AST::Apply'  && exists $op_to_boolean{ $cond->{code} }) {
             return $cond->emit_java($level, $wantarray) . '.to_boolean()';
         }
         else {
@@ -815,10 +1030,7 @@ sub is_scalar {
      || Perlito5::AST::Sub::is_anon_sub($_[0])
      || ($_[0]->isa( 'Perlito5::AST::Var' ) && $_[0]->{sigil} eq '$')
      || ($_[0]->isa( 'Perlito5::AST::Apply' ) 
-        && (  exists($op_to_str{ $_[0]->{code} })
-           || exists($op_to_num{ $_[0]->{code} })
-           || exists($op_to_boolean{ $_[0]->{code} })
-           #  || $_[0]->{code} eq 'prefix:<\\>'    -- \(@a) is a list
+        && (  exists($op_to_scalar{ $_[0]->{code} })
            )
         )
 }
@@ -844,7 +1056,7 @@ sub to_method_call_param_list {
     my ($this, $items, $level) = @_;
     my $items = to_list_preprocess( $items );
 
-    if ($this->isa('Perlito5::AST::Var') && $this->{sigil} eq "::") {
+    if ((ref($this) eq 'Perlito5::AST::Var') && $this->{sigil} eq '::') {
         # convert bareword to string
         $this = Perlito5::AST::Buf->new( buf => $this->{namespace} );
     }
@@ -867,7 +1079,7 @@ sub to_param_list {
 
     if (@$items == 1) {
         my $item = $items->[0];
-        if ( $item->isa('Perlito5::AST::Apply') && ( $item->code eq 'infix:<..>' ) ) {
+        if ( (ref($item) eq 'Perlito5::AST::Apply') && ( $item->{code} eq 'infix:<..>' ) ) {
             return '(PlArray)(' . $item->emit_java($level, 'list') . ')';
         }
     }
@@ -886,7 +1098,7 @@ sub to_list_for_push {
     }
 
     my $item = $items->[0];
-    if ( @$items == 1 && $item->isa('Perlito5::AST::Var') && ( $item->sigil eq '@' ) ) {
+    if ( @$items == 1 && (ref($item) eq 'Perlito5::AST::Var') && ( $item->{sigil} eq '@' ) ) {
         return $item->emit_java($level, 'list');
     }
 
@@ -902,7 +1114,7 @@ sub to_list {
     }
 
     my $item = $items->[0];
-    if ( @$items == 1 && $item->isa('Perlito5::AST::Var') && ( $item->sigil eq '@' ) ) {
+    if ( @$items == 1 && (ref($item) eq 'Perlito5::AST::Var') && ( $item->{sigil} eq '@' ) ) {
         return $item->emit_java($level, 'list');
     }
 
@@ -914,18 +1126,18 @@ sub to_list {
 sub to_list_preprocess {
     my @items;
     for my $item ( @{$_[0]} ) {
-        if (  $item->isa( 'Perlito5::AST::Apply' ) 
-           && ( $item->code eq 'circumfix:<( )>' || $item->code eq 'list:<,>' || $item->code eq 'infix:<=>>' )
+        if (  (ref($item) eq 'Perlito5::AST::Apply' ) 
+           && ( $item->{code} eq 'circumfix:<( )>' || $item->{code} eq 'list:<,>' || $item->{code} eq 'infix:<=>>' )
            )
         {
-            if ($item->isa('Perlito5::AST::Apply')
-               && $item->code eq 'infix:<=>>'
+            if ((ref($item) eq 'Perlito5::AST::Apply')
+               && $item->{code} eq 'infix:<=>>'
                )
             {
                 $item->{arguments}[0] = Perlito5::AST::Lookup->autoquote( $item->{arguments}[0] );
             }
 
-            for my $arg ( @{ to_list_preprocess($item->arguments) } ) {
+            for my $arg ( @{ to_list_preprocess($item->{arguments}) } ) {
                 push( @items, $arg);
             }
         }
@@ -953,18 +1165,18 @@ sub to_scalar {
 sub to_scalar_preprocess {
     my @items;
     for my $item ( @{$_[0]} ) {
-        if (  $item->isa( 'Perlito5::AST::Apply' ) 
-           && ( $item->code eq 'list:<,>' || $item->code eq 'infix:<=>>' )
+        if (  (ref($item) eq 'Perlito5::AST::Apply' ) 
+           && ( $item->{code} eq 'list:<,>' || $item->{code} eq 'infix:<=>>' )
            )
         {
-            if ($item->isa('Perlito5::AST::Apply')
-               && $item->code eq 'infix:<=>>'
+            if ((ref($item) eq 'Perlito5::AST::Apply')
+               && $item->{code} eq 'infix:<=>>'
                )
             {
                 $item->{arguments}[0] = Perlito5::AST::Lookup->autoquote( $item->{arguments}[0] );
             }
 
-            for my $arg ( @{ to_scalar_preprocess($item->arguments) } ) {
+            for my $arg ( @{ to_scalar_preprocess($item->{arguments}) } ) {
                 push( @items, $arg);
             }
         }
@@ -988,6 +1200,31 @@ sub to_runtime_context {
     return $s[0]
         if @s == 1 && is_scalar($items->[0]);
 
+
+    if ( @s == 1 && $items->[0]->isa( 'Perlito5::AST::Apply' ) 
+       && ( $items->[0]->{code} eq 'circumfix:<( )>' && @{$items->[0]->{arguments}} == 0 )
+       )
+    {
+        # empty list: return ()
+        return $s[0];
+    }
+
+    if ( @s == 1 && $items->[0]->isa( 'Perlito5::AST::Apply' ) 
+       && ( $items->[0]->{code} && $items->[0]->{namespace} )
+       )
+    {
+        # this looks like a plain-perl subroutine call
+        return $s[0];
+    }
+
+    if ( @s == 1 && $items->[0]->isa( 'Perlito5::AST::Call' ) 
+       )
+    {
+        # TODO - indentify java-native method calls
+        # this looks like a plain-perl subroutine call
+        return $s[0];
+    }
+
     'PerlOp.context(' . to_context($wantarray) . ', ' 
         .   join(', ', @s)
         . ')'
@@ -1008,7 +1245,7 @@ sub autoquote {
     my $index = shift;
     my $level = shift;
     $index = Perlito5::AST::Lookup->autoquote($index);
-    return to_str($index, $level);
+    return to_native_str($index, $level);
 }
 
 sub emit_java_autovivify {
@@ -1016,15 +1253,15 @@ sub emit_java_autovivify {
     my $level = shift;
     my $type = shift;  # 'array'/'hash'
 
-    if (  $obj->isa( 'Perlito5::AST::Index' )
-       || $obj->isa( 'Perlito5::AST::Lookup' )
-       || $obj->isa( 'Perlito5::AST::Call' )
+    if (  (ref($obj) eq 'Perlito5::AST::Index' )
+       || (ref($obj) eq 'Perlito5::AST::Lookup' )
+       || (ref($obj) eq 'Perlito5::AST::Call' )
        )
     {
         return $obj->emit_java($level, 0, $type);
     }
 
-    # if ( $obj->isa( 'Perlito5::AST::Apply' ) && $obj->code eq 'prefix:<$>' ) {
+    # if ( (ref($obj) eq 'Perlito5::AST::Apply' ) && $obj->{code} eq 'prefix:<$>' ) {
     #     my $arg  = $obj->{arguments}->[0];
     #     return 'get_scalarref(' 
     #             . $arg->emit_java( $level ) . ', '

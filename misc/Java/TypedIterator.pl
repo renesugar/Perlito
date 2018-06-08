@@ -1,10 +1,8 @@
 package Iterator::Of::String {
-    import => "java.util.Iterator",
-    java_type => "Iterator<String>",
+    import => "java.util.Iterator<String>",
 };
 package ArrayList::Of::String {
-   import => "java.util.ArrayList",
-   java_type => "ArrayList<String>",
+   import => "java.util.ArrayList<String>",
 }
 
 sub foo {
@@ -20,10 +18,9 @@ sub foo {
     return $x;
 }
 
-
 my $bar = foo();
 
-my ArrayList::Of::String $arr = $bar->to_ArrayListOfString();
+my ArrayList::Of::String $arr = $bar;
 my Iterator::Of::String $iterator = $arr->iterator();
 
 while($iterator->hasNext()) {

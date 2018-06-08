@@ -3,13 +3,11 @@ use strict;
 package Byte { }
 
 package ByteList {
-    import    => "java.util.ArrayList",
-    java_type => "ArrayList<Byte>",
+    import    => "java.util.ArrayList<Byte>",
 } 
 
 package ByteIterator {
-    import    => "java.util.Iterator",
-    java_type => "Iterator<Byte>",
+    import    => "java.util.Iterator<Byte>",
 }
 
 # create java ArrayList<Byte>
@@ -18,7 +16,7 @@ my ByteList $bar = ByteList->new();
 # copy perl array to java ArrayList<Byte>
 my @perlArray = (100, 65, 88);
 for (@perlArray) {
-     my Byte $x = $_->to_byte();
+     my Byte $x = $_;
      $bar->add($x);  
 }
 
@@ -31,6 +29,6 @@ while($barIterator->hasNext()) {
     say $byteWrappedInPerlVariable;
    
     # get byte in native java var
-    my Byte $nativeByte = $byteWrappedInPerlVariable->to_byte();
+    my Byte $nativeByte = $byteWrappedInPerlVariable;
 }
 

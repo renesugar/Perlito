@@ -140,32 +140,32 @@ our %safe_char = (
     '}' => 1,
     '~' => 1,
     "\n" => 1,
+    map { $_ => 1 } (
+            'A' .. 'Z',
+            'a' .. 'z',
+            '0' .. '9',
+        ),
 );
 
 sub escape_string {
     my $s = shift;
-    my @out;
     my $tmp = '';
     return "''" if $s eq '';
     return 0+$s if (0+$s) eq $s && $s =~ /[0-9]/;
+    my @out = '"';
     for my $c ( split "", $s ) {
         if ( $c eq '\\' || $c eq '$' || $c eq '@' || $c eq '"' ) {
-            $tmp = $tmp . '\\' . $c;
+            push @out, '\\' . $c;
         }
-        elsif  (  ($c ge 'a' && $c le 'z')
-            || ($c ge 'A' && $c le 'Z')
-            || ($c ge '0' && $c le '9')
-            || exists( $safe_char{$c} )
-            )
-        {
-            $tmp = $tmp . $c;
+        elsif ( exists( $safe_char{$c} ) ) {
+            push @out, $c;
         }
         else {
-            $tmp = $tmp . '\x{' . sprintf("%x", ord($c)) . '}';
+            push @out, '\x{' . sprintf("%x", ord($c)) . '}';
         }
     }
-    push @out, '"' . $tmp . '"' if $tmp ne '';
-    return join(' . ', @out);
+    push @out, '"';
+    return join('', @out);
 }
 
 sub _identity {
